@@ -785,46 +785,6 @@ footer {
   line-height: 1.5;
 }
 
-.chat-launcher {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 5;
-  border: 0;
-  border-radius: 999px;
-  padding: 15px 20px;
-  background: var(--ink);
-  color: white;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 700;
-  box-shadow: 0 10px 26px rgb(20 26 32 / 25%);
-}
-
-.chat-dialog {
-  width: min(440px, calc(100% - 28px));
-  max-width: none;
-  margin: auto 20px 20px auto;
-  padding: 0;
-  border: 0;
-  border-radius: 16px;
-  box-shadow: 0 20px 60px rgb(0 0 0 / 30%);
-}
-
-.chat-dialog::backdrop { background: rgb(14 20 24 / 35%); }
-.chat-panel { display: grid; grid-template-rows: auto minmax(240px, 1fr) auto; min-height: 460px; }
-.chat-header { display: flex; justify-content: space-between; gap: 20px; padding: 22px 24px; background: var(--ink); color: white; }
-.chat-header .eyebrow { margin: 0 0 4px; color: #cbd4b3; }
-.chat-header h2 { margin: 0; font-size: 22px; }
-.chat-close { border: 0; background: transparent; color: white; cursor: pointer; font-size: 30px; line-height: 1; }
-.chat-messages { display: grid; align-content: start; gap: 12px; overflow-y: auto; margin: 0; padding: 20px; list-style: none; background: #f5f5f1; }
-.chat-message { max-width: 85%; padding: 12px 14px; border-radius: 12px; line-height: 1.45; }
-.chat-message--assistant { background: white; color: var(--ink); }
-.chat-message--user { justify-self: end; background: #dce6c6; color: var(--ink); }
-.chat-form { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px; border-top: 1px solid #e4e4df; }
-.chat-form textarea { resize: vertical; min-height: 46px; padding: 10px; font: inherit; }
-.chat-form button { align-self: end; padding: 12px 16px; border: 0; background: var(--accent); color: var(--ink); cursor: pointer; font: inherit; font-weight: 700; }
-
 @media (max-width: 1050px) {
   nav {
     display: none;
@@ -930,9 +890,4 @@ footer {
   .vehicle-grid {
     grid-template-columns: 1fr;
   }
-
-  .chat-dialog { margin: auto 14px 14px; }
-  .chat-panel { min-height: min(600px, calc(100vh - 28px)); }
-  .chat-form { grid-template-columns: 1fr; }
-  .chat-form button { width: 100%; }
 }
