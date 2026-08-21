@@ -186,6 +186,27 @@
       </div>
     </footer>
 
+    <button id="chat-launcher" class="chat-launcher" type="button" aria-haspopup="dialog">
+      Chat with Northstar
+    </button>
+    <dialog id="chat-dialog" class="chat-dialog" aria-labelledby="chat-title">
+      <section class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">Northstar Motors</p>
+            <h2 id="chat-title">How can we help?</h2>
+          </div>
+          <button id="chat-close" class="chat-close" type="button" aria-label="Close chat">×</button>
+        </header>
+        <ol id="chat-messages" class="chat-messages" aria-live="polite"></ol>
+        <form id="chat-form" class="chat-form">
+          <label class="sr-only" for="chat-input">Your message</label>
+          <textarea id="chat-input" rows="2" maxlength="4000" placeholder="Ask about a vehicle, an offer, or a dealership"></textarea>
+          <button type="submit">Send</button>
+        </form>
+      </section>
+    </dialog>
+
     <script type="module" src="/src/app.js"></script>
   </body>
 </html>

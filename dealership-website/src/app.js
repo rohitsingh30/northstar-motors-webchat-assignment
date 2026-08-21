@@ -1,6 +1,7 @@
 import { createInventory } from "./features/inventory/inventory.js";
 import { renderLocations } from "./features/locations/locations.js";
 import { showVehicleDetail } from "./features/vehicle-detail/vehicle-detail.js";
+import { createWebchat } from "./features/webchat/webchat.js";
 
 const controls = {
   query: document.querySelector("#query-filter"),
@@ -92,6 +93,7 @@ inventory.load({ sort: "newest" }).then((count) => {
   document.querySelector("#vehicle-count").textContent = count;
 });
 renderLocations(document.querySelector("#location-list"));
+createWebchat();
 
 const linkedVehicleId = new URL(window.location).searchParams.get("vehicle");
 if (linkedVehicleId) {
