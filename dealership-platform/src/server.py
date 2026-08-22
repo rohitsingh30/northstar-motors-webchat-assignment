@@ -220,6 +220,8 @@ class Handler(BaseHTTPRequestHandler):
             return platform.create_dealership_message(body, idempotency_key), 201
         if method == "POST" and path == "/api/part-exchange-valuations":
             return platform.create_part_exchange_valuation(body, idempotency_key), 201
+        if method == "POST" and path == "/api/part-exchange-estimate":
+            return platform.estimate_part_exchange(body), 200
         if method == "PATCH" and (
             match := re.fullmatch(r"/api/workshop-bookings/([^/]+)", path)
         ):

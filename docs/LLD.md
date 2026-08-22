@@ -13,19 +13,11 @@ northstar-motors-webchat/
 ├── .env.example
 ├── dealership-platform/              # supplied; do not change behaviour/data
 ├── dealership-website/
-│   ├── index.html                     # mounts the chat widget
-│   └── src/
-│       ├── app.js                     # emits selected vehicle/page context
-│       └── features/webchat/
-│           ├── webchat.js             # controller and state reducer
-│           ├── webchat-api.js         # public API client/reconnect
-│           ├── webchat-view.js        # safe DOM rendering
-│           ├── webchat-context.js     # allow-listed page context
-│           └── webchat.css
+│   └── index.html                     # one external widget script tag only
 └── webchat-service/
     ├── Dockerfile
     ├── pyproject.toml
-    ├── src/webchat/
+    ├── webchat/
     │   ├── main.py                    # application factory/lifespan
     │   ├── config.py                  # environment validation
     │   ├── api/
@@ -56,9 +48,17 @@ northstar-motors-webchat/
     │   │   ├── database.py
     │   │   ├── migrations/
     │   │   └── repositories.py
-    │   └── observability/
-    │       ├── logging.py
-    │       └── redaction.py
+    │   ├── observability/
+    │   │   ├── logging.py
+    │   │   └── redaction.py
+    │   └── widget/                    # service-hosted browser bundle
+    │       ├── embed.js               # one-script entry point
+    │       ├── northstar-chat-widget.js
+    │       ├── webchat.js
+    │       ├── webchat-api.js
+    │       ├── webchat-view.js
+    │       ├── webchat-context.js
+    │       └── webchat.css
     └── tests/
         ├── unit/
         ├── integration/
@@ -88,8 +88,9 @@ northstar-motors-webchat/
 ```
 
 Only `conversationId` and the open/closed preference are stored in local storage. Conversation
-authorization uses a same-origin `HttpOnly`, `SameSite=Lax` cookie that browser JavaScript cannot
-read. The transcript restored from the backend is authoritative.
+authorization uses an `HttpOnly`, `SameSite=Lax` cookie that browser JavaScript cannot read. Local
+cross-origin requests are restricted to `WEBCHAT_ALLOWED_ORIGIN` with credentials; production may
+use a same-origin edge route. The transcript restored from the backend is authoritative.
 
 ### 3.2 UI composition
 
@@ -117,8 +118,9 @@ validated `veh-` identifier rather than accepted as model HTML.
 - the `vehicle` query parameter only when it matches `^veh-[0-9]{3}$`;
 - a constant/allow-listed page title.
 
-The vehicle detail controller dispatches a `northstar:vehicle-context` event on open and clear.
-The chat never copies arbitrary visible page text into the model context.
+An optional host may call the public `NorthstarChat.setContext` API. Without host integration, the
+widget derives context from the safe URL fields above. It never copies arbitrary visible page text
+into the model context.
 
 ### 3.4 Network behaviour
 
@@ -133,10 +135,11 @@ than executing it again. Confirmed actions use the same rule with `clientActionI
 
 ## 4. Public webchat API
 
-All endpoints are under `/api/chat/v1` and are reached through the website's same-origin reverse
-proxy. JSON bodies reject unknown security-sensitive fields. Conversation endpoints require the
-random `northstar_chat` authorization cookie after creation. State-changing requests also validate
-the same-origin `Origin` header and accept JSON only.
+All endpoints are under `/api/chat/v1`. The local widget calls the published service using a
+credentialed, explicitly allow-listed origin; production may use a same-origin edge route. JSON
+bodies reject unknown security-sensitive fields. Conversation endpoints require the random
+`northstar_chat` authorization cookie after creation. State-changing requests validate the exact
+configured `Origin` header and accept JSON only.
 
 ### 4.1 Create conversation
 

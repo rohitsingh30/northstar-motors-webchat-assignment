@@ -26,8 +26,9 @@ dealership service.
 
 ```mermaid
 flowchart LR
-    C[Customer browser] -->|Same-origin JSON| H[Website and chat reverse proxy]
-    H -->|Internal HTTP| W[Webchat service]
+    H[Dealership website] -->|Loads one module script| W[Webchat service]
+    C[Customer browser] --> H
+    C -->|Restricted-origin JSON| W
     C -->|Public catalogue reads used by host site| D[Dealership platform]
     W -->|Public reads and protected writes| D
     W -->|Prompt and approved tool loop| L[LLM provider]
@@ -48,15 +49,14 @@ Trust boundaries:
 Docker Compose will contain three services:
 
 1. `dealership-platform` on host port 4010, unchanged.
-2. `dealership-website` on host port 4173, extended with webchat UI assets and a narrow
-   `/api/chat` reverse proxy.
-3. `webchat-service` on internal container port 4020, using an internal URL such as
+2. `dealership-website` on host port 4173, unchanged except for one external widget script tag.
+3. `webchat-service` on host port 4020, serving both widget assets and the API, and using an internal URL such as
    `http://dealership-platform:4010` for platform calls.
 
-The website server proxies `/api/chat/...` to the internal webchat service, so the browser uses the
-existing `http://localhost:4173` origin. This permits a same-origin `HttpOnly` conversation cookie,
-avoids cross-origin token storage, and removes browser CORS configuration. In production, the same
-route is served over HTTPS.
+For local development, the service permits credentialed requests only from the configured website
+origin. The conversation token remains in an HttpOnly cookie and JavaScript receives only the
+opaque conversation ID. Production may route `/widget` and `/api/chat` through the website's edge
+origin without changing the widget or dealership application.
 
 The chat service uses a named volume for its SQLite database. The existing platform volume and
 reset behaviour stay unchanged. The webchat can expose its own explicit reset command for local

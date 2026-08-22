@@ -1,0 +1,396 @@
+/* Widget styles are isolated by the component's shadow root. */
+:host {
+  --webchat-ink: var(--ink, #132225);
+  --webchat-muted: var(--muted, #657376);
+  --webchat-accent: var(--accent, #cbdc45);
+  color: var(--webchat-ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  position: fixed;
+  z-index: 1000;
+}
+
+* { box-sizing: border-box; }
+
+.webchat-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 999px;
+  min-height: 44px;
+  padding: 11px 16px;
+  background: var(--webchat-ink);
+  color: #fff;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.webchat-launcher[hidden] { display: none; }
+
+.webchat-unread {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--webchat-accent);
+  color: var(--webchat-ink);
+}
+
+.webchat-panel {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(350px, 100%);
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-left: 1px solid #dde3e1;
+  border-radius: 0;
+  box-shadow: -8px 0 24px rgb(0 0 0 / 8%);
+  z-index: 1000;
+  background: #fbfcfa;
+  color: var(--webchat-ink);
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+}
+
+.webchat-panel:not([open]) { display: none; }
+
+.webchat-layout { position: relative; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; width: 100%; min-height: 0; flex: 1; }
+.webchat-header { grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 14px 13px 16px; border-bottom: 1px solid #e4e9e7; background: #fff; color: var(--webchat-ink); }
+.webchat-header .eyebrow { margin: 0 0 2px; color: #547068; font-size: 9px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+.webchat-header h2 { margin: 0; font-size: 16px; line-height: 1.2; }
+.webchat-header-actions { display: flex; align-items: center; gap: 1px; }
+.webchat-header-actions button { min-width: 40px; min-height: 44px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--webchat-ink); cursor: pointer; font: inherit; font-size: 12px; }
+.webchat-header-actions #webchat-new { padding-inline: 10px; font-weight: 750; }
+.webchat-header-actions button:hover { background: #f0f3f1; }
+#webchat-close { font-size: 23px; line-height: 1; }
+.webchat-history { grid-row: 2; min-width: 0; padding: 9px 12px 8px; border-bottom: 1px solid #e4e9e7; background: #f7f9f7; }
+.webchat-history[hidden] { display: none !important; }
+.webchat-history-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.webchat-history-heading .eyebrow { margin: 0 0 3px; color: #61746e; font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.webchat-history-heading h3 { margin: 0; font-size: 14px; }
+.webchat-history-new { width: 100%; min-height: 34px; margin-bottom: 7px; border: 1px solid #bfcac6; border-radius: 8px; background: #fff; color: var(--webchat-ink); cursor: pointer; font: inherit; font-size: 11px; font-weight: 750; text-align: left; padding: 7px 10px; }
+.webchat-history-list { display: grid; gap: 7px; }
+.webchat-history-list { max-height: 99px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; scrollbar-gutter: stable; }
+.webchat-history-row { display: grid; gap: 2px; width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--webchat-ink); cursor: pointer; font: inherit; text-align: left; }
+.webchat-history-row:hover { border-color: #d9e1de; background: #fff; }
+.webchat-history-row[aria-current="true"] { border-color: #c7d2ce; background: #fff; box-shadow: 0 4px 12px rgb(21 44 37 / 5%); }
+.webchat-history-row strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.webchat-history-row span { color: var(--webchat-muted); font-size: 10px; }
+.webchat-history-empty { padding: 18px 10px; color: var(--webchat-muted); font-size: 12px; text-align: center; }
+.webchat-transcript { grid-row: 3; display: grid; align-content: start; gap: 10px; min-height: 0; overflow-y: auto; margin: 0; padding: 16px; list-style: none; background: #fbfcfa; }
+.webchat-message { max-width: 92%; padding: 8px 0; color: var(--webchat-ink); font-size: 14px; line-height: 1.5; }
+.webchat-message--rich { width: 100%; max-width: 100%; }
+.webchat-message p { margin: 0; }
+.webchat-assistant-content { display: grid; gap: 6px; }
+.webchat-message--assistant > p:first-child,
+.webchat-message--assistant > .webchat-assistant-content:first-child {
+  min-width: 0;
+  max-width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #dfe7e2;
+  border-radius: 4px 14px 14px;
+  background: #f1f5f2;
+  box-shadow: 0 3px 10px rgb(19 34 37 / 4%);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.webchat-message-list { display: grid; gap: 3px; margin: 0; padding-left: 18px; }
+.webchat-message-list li { padding-left: 2px; }
+.webchat-long-answer { gap: 10px; }
+.webchat-long-answer-intro { font-weight: 650; }
+.webchat-long-answer-list { gap: 8px; padding-left: 20px; }
+.webchat-long-answer-list li { padding-left: 3px; }
+.webchat-long-answer-list li::marker { color: #718a35; }
+.webchat-message--user { justify-self: end; padding: 9px 12px; border-radius: 14px 14px 4px 14px; background: #e5edce; }
+.webchat-suggestions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 9px; }
+.webchat-suggestion { width: 100%; min-width: 0; min-height: 32px; padding: 5px 9px; overflow: hidden; border: 1px dashed #cbd5d1; border-radius: 999px; background: #fafcf8; color: #61716d; cursor: pointer; font: inherit; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.webchat-suggestion:hover { border-color: #8e9e98; background: #f1f5e9; color: var(--webchat-ink); }
+.webchat-suggestion:disabled { cursor: wait; opacity: 0.55; }
+.webchat-service-suggestions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex-wrap: unset; }
+.webchat-service-suggestions .webchat-suggestion { white-space: normal; text-overflow: clip; }
+.webchat-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; margin-top: 12px; padding: 0 1px 7px; }
+.webchat-cards > * { width: 100%; min-width: 0; }
+.webchat-comparison-table { width: 100%; min-width: 0; margin-top: 12px; overflow: hidden; border: 1px solid #dbe2df; border-radius: 12px; }
+.webchat-comparison-table table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+.webchat-comparison-table th, .webchat-comparison-table td { min-width: 0; padding: 7px 6px; overflow-wrap: anywhere; text-align: left; border-bottom: 1px solid #dbe2df; vertical-align: top; }
+.webchat-comparison-table th:first-child { width: 22%; }
+.webchat-comparison-table thead th { background: var(--webchat-muted); font-weight: 700; }
+.webchat-comparison-table tbody th { color: var(--webchat-muted); font-weight: 600; white-space: nowrap; }
+.webchat-comparison-table tr:last-child th, .webchat-comparison-table tr:last-child td { border-bottom: 0; }
+.webchat-comparison-empty { margin: 0; padding: 12px; color: var(--webchat-muted); font-size: 11px; }
+.webchat-dealership-departments { display: grid; gap: 6px; margin-top: 10px; }
+.webchat-department-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.webchat-department-chips span { padding: 4px 8px; border: 1px solid #dbe2df; border-radius: 999px; color: var(--webchat-muted); font-size: 11px; }
+.webchat-card { display: grid; gap: 4px; padding: 11px; border: 1px solid #e0e5e2; border-radius: 10px; background: #fff; }
+.webchat-card-price { font-weight: 700; }
+.webchat-card-status { width: fit-content; color: #3f5d55; font-size: 12px; font-weight: 750; text-transform: capitalize; }
+.webchat-card a { width: fit-content; margin-top: 5px; color: #1d584e; font-weight: 700; text-underline-offset: 3px; }
+.webchat-offer-card { gap: 10px; padding: 14px; border-color: #d9e3df; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 4px 13px rgb(24 45 39 / 5%); }
+.webchat-offer-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.webchat-offer-heading strong { font-size: 15px; letter-spacing: -0.015em; }
+.webchat-offer-type { flex: none; padding: 3px 6px; border-radius: 999px; background: #e7f0e9; color: #426154; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.webchat-offer-card .webchat-card-price { padding: 9px 0; border-top: 1px solid #e3ebe7; border-bottom: 1px solid #e3ebe7; color: var(--webchat-ink); font-size: 20px; letter-spacing: -0.035em; }
+.webchat-offer-terms { display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; margin: 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-offer-terms dt { font-weight: 700; }
+.webchat-offer-terms dd { margin: 0; text-align: right; }
+.webchat-service-list { gap: 8px; }
+.webchat-service-card { overflow: hidden; border: 1px solid #dfe5e2; border-radius: 11px; background: #fff; box-shadow: 0 5px 16px rgb(19 34 37 / 5%); }
+.webchat-service-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 12px 3px; }
+.webchat-service-heading h3 { margin: 0; font-size: 14px; letter-spacing: -0.015em; }
+.webchat-service-duration { flex: 0 0 auto; padding: 3px 6px; border-radius: 999px; background: #f0f3f1; color: var(--webchat-muted); font-size: 9px; font-weight: 750; }
+.webchat-service-description { padding: 0 12px; color: var(--webchat-muted); font-size: 11px; line-height: 1.4; }
+.webchat-service-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 12px 11px; }
+.webchat-service-footer .webchat-primary-action { min-height: 34px; padding-inline: 12px; }
+.webchat-service-price { font-size: 11px; }
+.webchat-vehicle-card { min-width: 0; overflow: hidden; border: 1px solid #dfe5e2; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgb(19 34 37 / 7%); }
+.webchat-vehicle-media { position: relative; height: clamp(126px, 28vw, 155px); overflow: hidden; background: #edf0ed; }
+.webchat-vehicle-media img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 180ms ease; }
+.webchat-vehicle-card:hover .webchat-vehicle-media img { transform: scale(1.018); }
+.webchat-availability { position: absolute; top: 10px; left: 10px; padding: 5px 8px; border-radius: 5px; background: #e9f3e8; color: #315a2e; font-size: 9px; font-weight: 850; letter-spacing: 0.05em; text-transform: uppercase; }
+.webchat-availability.reserved { background: #fff1cf; color: #7a5712; }
+.webchat-availability.sold { background: #e8ebeb; color: #526164; }
+.webchat-vehicle-status-card { display: grid; gap: 7px; margin-top: 10px; padding: 12px; border: 1px solid #dbe2df; border-radius: 10px; background: #fff; }
+.webchat-vehicle-status-card p { margin: 0; }
+.webchat-status-pill { width: fit-content; padding: 4px 7px; border-radius: 999px; background: #e9f3e8; color: #315a2e; font-size: 9px; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
+.webchat-status-pill.reserved { background: #fff1cf; color: #7a5712; }
+.webchat-status-pill.sold { background: #e8ebeb; color: #526164; }
+.webchat-vehicle-content { padding: 11px 12px 12px; }
+.webchat-vehicle-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; }
+.webchat-vehicle-identity { min-width: 0; }
+.webchat-vehicle-meta,
+.webchat-vehicle-variant { margin: 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-vehicle-content h3 { margin: 4px 0 1px; font-size: 17px; letter-spacing: -0.025em; }
+.webchat-vehicle-specs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 9px 0; padding: 8px 0; border-top: 1px solid #e4e9e7; border-bottom: 1px solid #e4e9e7; }
+.webchat-vehicle-specs > div { min-width: 0; }
+.webchat-vehicle-spec-divider { padding-left: 8px; border-left: 1px solid #e4e9e7; }
+.webchat-vehicle-specs dt { color: #829093; font-size: 8px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.webchat-vehicle-specs dd { overflow: hidden; margin: 3px 0 0; font-size: 10px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
+.webchat-vehicle-price { display: grid; justify-items: end; gap: 2px; white-space: nowrap; text-align: right; }
+.webchat-vehicle-price strong { font-size: 17px; letter-spacing: -0.03em; white-space: nowrap; }
+.webchat-vehicle-price span { color: var(--webchat-muted); font-size: 9px; }
+.webchat-vehicle-actions,
+.webchat-inline-actions { display: grid; grid-template-columns: 1fr 1.35fr; gap: 7px; margin-top: 10px; }
+.webchat-primary-action,
+.webchat-secondary-action { display: grid; place-items: center; min-height: 41px; margin: 0; padding: 8px 10px; border: 1px solid var(--webchat-ink); border-radius: 8px; cursor: pointer; font: inherit; font-size: 11px; font-weight: 750; text-align: center; text-decoration: none; }
+.webchat-primary-action { background: var(--webchat-ink); color: #fff; }
+.webchat-secondary-action { background: #fff; color: var(--webchat-ink); }
+.webchat-flow-close { position: absolute; top: 7px; right: 9px; display: grid; width: 26px; height: 26px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: #eef2ef; color: var(--webchat-ink); cursor: pointer; font: inherit; font-size: 20px; line-height: 1; }
+.webchat-flow-close:hover { background: #dfe8e2; }
+.webchat-flow-close.is-cancel { background: #fbe8e6; color: #963b32; }
+.webchat-flow-close.is-cancel:hover { background: #f3cbc7; }
+.webchat-flow-close:disabled { cursor: wait; opacity: 0.55; }
+.webchat-booking-flow { border-top: 1px solid #dfe5e2; background: #f8faf7; }
+.webchat-booking-flow[hidden] { display: none; }
+.webchat-workshop-flow-standalone { margin-top: 12px; overflow: hidden; border: 1px solid #dfe5e2; border-radius: 12px; background: #fff; box-shadow: 0 6px 20px rgb(19 34 37 / 6%); }
+.webchat-workshop-flow-standalone .webchat-flow-close { display: none; }
+.webchat-workshop-flow-standalone .webchat-slot-picker { margin: 0; border: 0; }
+.webchat-slot-picker { display: grid; gap: 10px; margin-top: 12px; padding: 12px; overflow: hidden; border: 1px solid #dce3df; border-radius: 12px; background: #fff; }
+.webchat-slot-picker.is-inline { margin: 0; padding: 14px; border: 0; border-radius: 0; background: transparent; }
+.webchat-slot-title { font-size: 15px; }
+.webchat-slot-location { margin-top: -8px; color: var(--webchat-muted); font-size: 12px; }
+.webchat-workshop-location { margin: 0; color: var(--webchat-ink); font-size: 12px; font-weight: 750; }
+.webchat-location-picker { display: flex; flex-wrap: wrap; gap: 5px; padding: 1px 0 3px; }
+.webchat-location-button { flex: 0 0 auto; min-height: 32px; padding: 5px 9px; border: 1px solid #d5deda; border-radius: 999px; background: #fff; color: var(--webchat-muted); cursor: pointer; font: inherit; font-size: 10px; font-weight: 700; }
+.webchat-location-button.is-selected { border-color: var(--webchat-ink); background: #eef3dc; color: var(--webchat-ink); }
+.webchat-date-controls { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.webchat-date-strip { display: flex; justify-content: center; gap: 5px; overflow: hidden; }
+.webchat-date-button { display: grid; flex: 0 0 54px; place-items: center; gap: 1px; min-width: 0; min-height: 62px; padding: 5px; border: 1px solid #dce3df; border-radius: 9px; background: #fff; color: var(--webchat-ink); cursor: pointer; font: inherit; font-size: 10px; }
+.webchat-date-button strong { font-size: 17px; }
+.webchat-date-button.is-selected { border-color: var(--webchat-ink); background: #eef3dc; box-shadow: inset 0 -3px var(--webchat-accent); }
+.webchat-date-arrow { width: 32px; height: 62px; flex: 0 0 32px; border: 0; border-radius: 8px; background: #f0f3f1; color: var(--webchat-ink); cursor: pointer; font: inherit; font-size: 22px; }
+.webchat-date-arrow:disabled { cursor: default; opacity: 0.3; }
+.webchat-slot-day-heading { color: var(--webchat-muted); font-size: 12px; font-weight: 700; }
+.webchat-time-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.webchat-time-button { min-height: 42px; border: 1px solid #bdcac6; border-radius: 8px; background: #fff; color: var(--webchat-ink); cursor: pointer; font: inherit; font-size: 13px; font-weight: 750; }
+.webchat-time-button:hover { border-color: var(--webchat-ink); background: #f6f8ef; }
+.webchat-time-button:disabled,
+.webchat-primary-action:disabled,
+.webchat-secondary-action:disabled { cursor: wait; opacity: 0.55; }
+.webchat-test-drive-details,
+.webchat-inline-confirmation,
+.webchat-inline-receipt,
+.webchat-booked-test-drive { position: relative; display: grid; gap: 8px; padding: 12px; }
+.webchat-slot-picker.is-inline { position: relative; }
+.webchat-flow-eyebrow { color: #668078; font-size: 9px; font-weight: 850; letter-spacing: 0.08em; text-transform: uppercase; }
+.webchat-selected-slot { font-size: 14px; }
+.webchat-details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 3px; }
+.webchat-details-grid label { display: grid; gap: 4px; color: #526164; font-size: 10px; font-weight: 750; }
+.webchat-details-grid input, .webchat-details-grid textarea { min-width: 0; padding: 8px 9px; border: 1px solid #cbd5d1; border-radius: 7px; background: #fff; color: var(--webchat-ink); font: inherit; font-size: 12px; }
+.webchat-details-grid input { height: 39px; }
+.webchat-details-grid textarea { min-height: 68px; resize: vertical; line-height: 1.4; }
+.webchat-details-grid input[aria-invalid="true"], .webchat-details-grid textarea[aria-invalid="true"] { border-color: #a53e35; box-shadow: 0 0 0 2px rgb(165 62 53 / 10%); }
+.webchat-field-error { color: #94372f; font-size: 9px; font-weight: 650; line-height: 1.35; }
+.webchat-form-error { display: block; padding: 8px 9px; border-radius: 7px; background: #fbe8e6; color: #94372f; font-size: 10px; font-weight: 700; line-height: 1.4; }
+.webchat-form-error[hidden] { display: none; }
+.webchat-details-grid label:nth-child(n + 3) { grid-column: 1 / -1; }
+.webchat-details-grid > label[data-field-name="firstName"] { grid-column: 1 !important; }
+.webchat-details-grid > label[data-field-name="lastName"] { grid-column: 2 !important; }
+.webchat-callback-card { gap: 7px; padding: 10px; }
+.webchat-callback-card .webchat-details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.webchat-callback-card .webchat-inline-actions { grid-template-columns: 1fr; }
+.webchat-callback-fields label:nth-child(3) { grid-column: 1; }
+.webchat-callback-fields label:nth-child(4) { grid-column: 2; }
+.webchat-callback-fields label:nth-child(n + 5) { grid-column: 1 / -1; }
+.webchat-callback-fields label:nth-child(7) { grid-column: 1 / -1; }
+.webchat-workshop-fields label:nth-child(3) { grid-column: 1; }
+.webchat-workshop-fields label:nth-child(4) { grid-column: 2; }
+.webchat-workshop-fields label:nth-child(n + 5) { grid-column: 1 / -1; }
+.webchat-part-exchange-fields label:nth-child(3) { grid-column: 1; }
+.webchat-part-exchange-fields label:nth-child(4) { grid-column: 2; }
+.webchat-part-exchange-fields label:nth-child(n + 5) { grid-column: 1 / -1; }
+.webchat-private-lookup-fields label:nth-child(3) { grid-column: 1; }
+.webchat-private-lookup-fields label:nth-child(4) { grid-column: 2; }
+.webchat-privacy-note { color: var(--webchat-muted); font-size: 9px; line-height: 1.45; }
+.webchat-inline-confirmation > p { color: var(--webchat-muted); font-size: 11px; }
+.webchat-workshop-vehicle { padding: 7px 9px; border-radius: 7px; background: #f0f3f1; color: var(--webchat-ink) !important; font-weight: 700; }
+.webchat-inline-receipt { place-items: center; padding-block: 17px; text-align: center; }
+.webchat-inline-receipt p { color: var(--webchat-muted); font-size: 11px; }
+.webchat-receipt-card { margin-top: 12px; padding: 18px 14px; border: 1px solid #d5e1d8; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f4f8ed 100%); box-shadow: 0 6px 18px rgb(24 45 39 / 7%); }
+.webchat-receipt-card > strong { font-size: 15px; letter-spacing: -.015em; }
+.webchat-receipt-card > p { margin: 0; }
+.webchat-receipt-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; background: var(--webchat-accent); font-size: 18px; font-weight: 850; }
+.webchat-booked-test-drive-details { margin: 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-confirmation,
+.webchat-private-lookup { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid #d7d9ce; border-radius: 9px; background: #fff; }
+.webchat-confirmation dl { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 0; }
+.webchat-confirmation dt { color: var(--webchat-muted); text-transform: capitalize; }
+.webchat-confirmation dd { margin: 0; }
+.webchat-confirmation-actions { display: flex; gap: 8px; }
+.webchat-confirmation-actions button,
+.webchat-private-lookup button { min-height: 44px; padding: 9px 12px; border: 1px solid var(--webchat-ink); background: var(--webchat-ink); color: #fff; cursor: pointer; }
+.webchat-confirmation-actions button:last-child { background: #fff; color: var(--webchat-ink); }
+.webchat-workshop-amend-review { gap: 12px; padding: 14px; border-color: #d9e3df; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
+.webchat-amend-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #e3ebe7; }
+.webchat-amend-review-heading > strong { font-size: 15px; letter-spacing: -.015em; }
+.webchat-booking-reference { width: fit-content; padding: 4px 7px; border-radius: 999px; background: #eef3dc; color: #48604e; font-size: 9px; font-weight: 800; letter-spacing: .04em; }
+.webchat-amend-comparison { display: grid; gap: 8px; }
+.webchat-amend-appointment { display: grid; gap: 4px; padding: 10px; border: 1px solid #e0e7e3; border-radius: 9px; background: #fff; }
+.webchat-amend-appointment.is-new { border-color: #cdd9aa; background: #f7f9ec; }
+.webchat-amend-appointment > strong { font-size: 13px; }
+.webchat-amend-location { color: var(--webchat-muted); font-size: 11px; }
+.webchat-amend-service { margin: 0; color: var(--webchat-muted); font-size: 11px; font-weight: 700; }
+.webchat-workshop-amend-review .webchat-confirmation-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
+.webchat-workshop-amend-review .webchat-confirmation-actions button { width: 100%; border-radius: 8px; font: inherit; font-size: 11px; font-weight: 750; }
+.webchat-vehicle-interest-review { gap: 12px; padding: 14px; border-color: #d9e3df; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
+.webchat-interest-review-heading { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid #e3ebe7; }
+.webchat-interest-review-heading > strong { font-size: 15px; letter-spacing: -.015em; }
+.webchat-interest-review-heading > p { margin: 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-vehicle-interest-review .webchat-confirmation-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
+.webchat-vehicle-interest-review .webchat-confirmation-actions button { width: 100%; border-radius: 8px; font: inherit; font-size: 11px; font-weight: 750; }
+.webchat-private-lookup p { margin: 0; color: var(--webchat-muted); font-size: 12px; }
+.webchat-private-lookup label { display: grid; gap: 3px; font-size: 12px; font-weight: 700; }
+.webchat-private-lookup input { padding: 8px; font: inherit; }
+.webchat-opening-hours-card { display: grid; gap: 9px; padding: 12px; border: 1px solid #dfe6e2; border-radius: 10px; background: #fff; }
+.webchat-opening-hours-heading { display: grid; gap: 2px; padding-bottom: 8px; border-bottom: 1px solid #e8eeeb; }
+.webchat-opening-hours-heading h3 { margin: 0; color: var(--webchat-ink); font-size: 15px; letter-spacing: -0.01em; }
+.webchat-opening-section-label { margin: 0; color: #61746e; font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.webchat-dealership-card { display: grid; gap: 10px; padding: 14px; border: 1px solid #dfe6e2; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f8faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
+.webchat-dealership-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e8eeeb; padding-bottom: 9px; }
+.webchat-dealership-heading h3 { margin: 0; color: var(--webchat-ink); font-size: 15px; letter-spacing: -0.01em; }
+.webchat-dealership-town { color: var(--webchat-muted); font-size: 11px; font-weight: 700; }
+.webchat-dealership-details { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 12px; }
+.webchat-dealership-details dt { color: var(--webchat-muted); font-weight: 650; }
+.webchat-dealership-details dd { margin: 0; color: var(--webchat-ink); text-align: right; overflow-wrap: anywhere; }
+.webchat-dealership-email { min-width: 0; white-space: nowrap; font-size: clamp(9px, 2.7vw, 12px); letter-spacing: -0.015em; }
+.webchat-dealership-brands { margin: 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-opening-location { color: var(--webchat-muted); font-size: 11px; }
+.webchat-opening-departments { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; margin: 0; font-size: 12px; }
+.webchat-opening-departments dt { color: var(--webchat-ink); font-weight: 700; }
+.webchat-opening-departments dd { margin: 0; color: var(--webchat-muted); font-weight: 500; line-height: 1.45; text-align: right; }
+.webchat-opening-schedules { display: grid; gap: 2px; }
+.webchat-opening-schedules > div { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 7px; }
+.webchat-opening-period { color: #61746e; font-size: 11px; font-weight: 700; }
+.webchat-opening-closed-days { margin: -2px 0 0; color: #61746e; font-size: 11px; font-weight: 700; }
+.webchat-opening-holiday { display: grid; gap: 5px; margin: 0; padding: 8px; border-radius: 7px; background: #f4f7e9; color: #53635e; font-size: 10px; line-height: 1.4; }
+.webchat-opening-holiday strong { color: var(--webchat-ink); font-size: 11px; }
+.webchat-opening-holiday-hours { font-size: 10px; }
+.webchat-opening-holiday-hours dd { color: var(--webchat-ink); font-weight: 700; }
+.webchat-part-exchange-card p { margin: 0; color: var(--webchat-muted); font-size: 12px; }
+.webchat-part-exchange-card { gap: 7px; padding: 10px; }
+.webchat-part-exchange-card .webchat-inline-actions { grid-template-columns: 1fr; }
+.webchat-workflow-form-card[data-workflow-kind="sales_enquiry"] .webchat-inline-actions { grid-template-columns: 1fr; }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] .webchat-inline-actions { grid-template-columns: 1fr; }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] { gap: 9px; padding: 14px; border-color: #d9e3df; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] > strong { font-size: 16px; letter-spacing: -.02em; }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] > p { margin: -3px 0 1px; color: var(--webchat-muted); font-size: 11px; line-height: 1.45; }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] form { display: grid; gap: 9px; }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] .webchat-details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 0; }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] .webchat-details-grid label { grid-column: 1 / -1; gap: 5px; font-size: 10px; }
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] .webchat-details-grid input,
+.webchat-workflow-form-card[data-workflow-kind="vehicle_interest"] .webchat-details-grid textarea { width: 100%; border-radius: 8px; }
+.webchat-interest-details-label { margin-top: 2px; padding-top: 10px; border-top: 1px solid #e3ebe7; }
+.webchat-interest-vehicle { display: grid; gap: 7px; padding: 10px; border: 1px solid #dce5e0; border-radius: 9px; background: #fff; }
+.webchat-interest-vehicle-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px 8px; }
+.webchat-interest-vehicle-heading .webchat-flow-eyebrow { grid-column: 1 / -1; }
+.webchat-interest-vehicle-heading > strong { min-width: 0; font-size: 15px; letter-spacing: -.02em; }
+.webchat-interest-vehicle-meta { margin: 0; color: var(--webchat-muted); font-size: 10px; }
+.webchat-interest-vehicle dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 1px 0 0; padding-top: 9px; border-top: 1px solid #e6ece9; font-size: 10px; }
+.webchat-interest-vehicle dt { color: var(--webchat-muted); font-weight: 700; }
+.webchat-interest-vehicle dd { margin: 0; font-weight: 700; text-align: right; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] { gap: 9px; padding: 14px; border-color: #d9e3df; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] > strong { font-size: 15px; letter-spacing: -.015em; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] > p { margin: -3px 0 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] .webchat-current-booking { position: relative; display: grid; gap: 4px; margin: 1px 0; padding: 10px; border: 1px solid #e0e7e3; border-radius: 9px; background: #fff; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] .webchat-current-booking > span:not(.webchat-flow-eyebrow):not(.webchat-booking-reference) { color: var(--webchat-muted); font-size: 10px; line-height: 1.4; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] .webchat-current-booking .webchat-booking-reference { margin-top: 3px; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] .webchat-details-grid { grid-template-columns: 1fr; gap: 9px; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] .webchat-details-grid label { grid-column: 1 / -1; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] .webchat-inline-actions { grid-template-columns: 1fr; gap: 7px; }
+.webchat-workflow-form-card[data-workflow-kind="workshop_amend"] .webchat-inline-actions > * { width: 100%; }
+.webchat-part-exchange-estimate { display: grid; gap: 7px; margin-top: 10px; padding: 12px; border: 1px solid #d7dfbe; border-radius: 10px; background: #f7f9ec; }
+.webchat-estimate-range { font-size: 22px; letter-spacing: -0.04em; }
+.webchat-estimate-details { margin: 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-private-lookup { gap: 8px; padding: 10px; }
+.webchat-details-grid select { min-width: 0; height: 39px; padding: 8px 9px; border: 1px solid #cbd5d1; border-radius: 7px; background: #fff; color: var(--webchat-ink); font: inherit; font-size: 12px; }
+.webchat-details-grid select[aria-invalid="true"] { border-color: #a53e35; box-shadow: 0 0 0 2px rgb(165 62 53 / 10%); }
+.webchat-progress { grid-row: 4; display: grid; gap: 5px; padding: 7px 14px 8px; background: #fbfcfa; }
+.webchat-progress[hidden] { display: none; }
+.webchat-progress-copy { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.webchat-status { min-height: 18px; margin: 0; padding: 0; color: var(--webchat-muted); font-size: 11px; }
+.webchat-progress-value { color: #61746e; font-size: 10px; font-variant-numeric: tabular-nums; }
+.webchat-progress progress { width: 100%; height: 3px; overflow: hidden; border: 0; border-radius: 999px; background: #e6ebe8; accent-color: var(--webchat-accent); }
+.webchat-progress progress::-webkit-progress-bar { border-radius: 999px; background: #e6ebe8; }
+.webchat-progress progress::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, #9bb570, var(--webchat-accent)); transition: width .25s ease; }
+.webchat-thinking-dots { display: flex; gap: 3px; }
+.webchat-thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: #6d817a; animation: webchat-thinking 1s ease-in-out infinite; }
+.webchat-thinking-dots i:nth-child(2) { animation-delay: .14s; }
+.webchat-thinking-dots i:nth-child(3) { animation-delay: .28s; }
+@keyframes webchat-thinking { 0%, 60%, 100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+.webchat-form { grid-row: 5; padding: 14px 12px 12px; background: #fbfcfa; }
+.webchat-form > label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.webchat-starter-suggestions { grid-template-columns: 1fr; justify-items: start; gap: 6px; margin: 0 0 16px; }
+.webchat-starter-suggestions[hidden] { display: none; }
+.webchat-starter-suggestions .webchat-suggestion { flex: none; width: fit-content; max-width: 100%; overflow: visible; white-space: normal; text-align: left; text-overflow: clip; }
+.webchat-form-input { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.webchat-form textarea { min-height: 48px; max-height: 120px; resize: none; padding: 12px; border: 1px solid #cfd8d5; border-radius: 12px; font: inherit; font-size: 14px; line-height: 1.35; }
+.webchat-form-input button { align-self: stretch; min-width: 58px; min-height: 44px; padding: 0 12px; border: 0; border-radius: 12px; background: var(--webchat-accent); color: var(--webchat-ink); cursor: pointer; font: inherit; font-size: 13px; font-weight: 750; }
+.webchat-form-input button:disabled { cursor: wait; opacity: 0.65; }
+
+button:focus-visible,
+textarea:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 3px solid var(--webchat-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 799px) {
+  .webchat-launcher { right: 14px; bottom: 14px; }
+  .webchat-panel { inset: 0; width: 100%; height: 100%; border-radius: 0; }
+  .webchat-layout { height: 100dvh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}

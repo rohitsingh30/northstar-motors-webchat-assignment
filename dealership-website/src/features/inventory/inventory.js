@@ -4,6 +4,25 @@ import { escapeHtml, money, number, titleCase } from "../../shared/format.js";
 function vehicleCard(vehicle, onSelect) {
   const article = document.createElement("article");
   article.className = "vehicle-card";
+  article.dataset.chatEntity = "vehicle";
+  article.dataset.chatEntityId = vehicle.id;
+  article.dataset.chatEntityLabel = `${vehicle.make} ${vehicle.model}`;
+  article.dataset.chatEntityData = JSON.stringify({
+    make: vehicle.make,
+    model: vehicle.model,
+    variant: vehicle.variant,
+    year: vehicle.year,
+    bodyStyle: vehicle.bodyStyle,
+    colour: vehicle.colour,
+    pricePence: vehicle.pricePence,
+    monthlyPricePence: vehicle.monthlyPricePence,
+    mileage: vehicle.mileage,
+    fuelType: vehicle.fuelType,
+    transmission: vehicle.transmission,
+    availability: vehicle.availability,
+    dealershipId: vehicle.dealershipId,
+    dealershipTown: vehicle.dealershipTown,
+  });
   const statusClass = ["reserved", "sold"].includes(vehicle.availability)
     ? vehicle.availability
     : "";

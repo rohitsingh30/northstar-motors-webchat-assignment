@@ -41,11 +41,13 @@ class PlatformTestCase(unittest.TestCase):
     def test_seeded_inventory_and_locations_are_available(self) -> None:
         dealerships = self.platform.list_dealerships()
         vehicles = self.platform.list_vehicles({"pageSize": "50"})
+        workshop_slots = self.platform.list_workshop_availability({})["items"]
 
         self.assertEqual(len(dealerships["items"]), 4)
         self.assertEqual(vehicles["pagination"]["totalItems"], 60)
         self.assertEqual(self.platform.get_vehicle("veh-007")["availability"], "reserved")
         self.assertIsNone(self.platform.get_vehicle("veh-019")["pricePence"])
+        self.assertTrue(workshop_slots[0]["dealershipTown"])
 
     def test_sales_enquiry_is_saved_as_received(self) -> None:
         enquiry = self.platform.create_sales_enquiry(

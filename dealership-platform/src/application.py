@@ -437,6 +437,7 @@ class DealershipPlatform:
             rows = connection.execute(
                 f"""
                 SELECT workshop_slots.*, dealerships.name AS dealership_name,
+                       dealerships.town AS dealership_town,
                        service_types.name AS service_name,
                        service_types.duration_minutes,
                        service_types.price_from_pence
@@ -1013,6 +1014,26 @@ class DealershipPlatform:
             "estimateNotice"
         ]
         return response
+
+    def estimate_part_exchange(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Return a non-binding estimate before collecting contact details."""
+        registration = validate_registration(body.get("registration"))
+        mileage = require_integer(body, "mileage", maximum=1_000_000)
+        condition = require_enum(body, "condition", {"excellent", "good", "fair"})
+        registration_factor = sum(ord(character) for character in registration) % 650_000
+        condition_factor = {"excellent": 1.0, "good": 0.88, "fair": 0.72}[condition]
+        base = max(175_000, 1_900_000 + registration_factor - mileage * 8)
+        estimate_low = round(base * condition_factor / 5_000) * 5_000
+        estimate_high = estimate_low + max(90_000, round(estimate_low * 0.12 / 5_000) * 5_000)
+        return {
+            "status": "estimated",
+            "registration": registration,
+            "mileage": mileage,
+            "condition": condition,
+            "estimateLowPence": estimate_low,
+            "estimateHighPence": estimate_high,
+            "estimateNotice": self.get_business_information()["partExchange"]["estimateNotice"],
+        }
 
     def get_record(self, resource: str, record_id: str) -> dict[str, Any]:
         table = {
