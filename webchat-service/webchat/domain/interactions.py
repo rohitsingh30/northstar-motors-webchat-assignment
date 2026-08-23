@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -122,3 +123,168 @@ def preceding_interaction(messages) -> tuple[PendingInteraction, Any] | None:
         interaction = parse_interaction(getattr(message, "interaction_json", None))
         return (interaction, message) if interaction else None
     return None
+
+
+def selected_choice_action(messages) -> dict[str, Any] | None:
+    """Resolve a visible choice without asking a model to reinterpret it.
+
+    Exact visible-text matching remains the default. Natural replies can also
+    select one uniquely identifiable option because every candidate still
+    resolves to an application-owned typed action.
+    """
+    pending = preceding_interaction(messages)
+    if pending is None:
+        return None
+    interaction, assistant_message = pending
+    if interaction.kind != "choice" or not assistant_message.view_payload_json:
+        return None
+    latest_customer_text = next(
+        (message.text for message in reversed(messages) if message.role == "user"),
+        "",
+    )
+    normalized_customer_text = _choice_text(latest_customer_text)
+    if not normalized_customer_text:
+        return None
+    try:
+        payload = json.loads(assistant_message.view_payload_json)
+    except (TypeError, ValueError):
+        return None
+    suggestions = payload.get("suggestions") if isinstance(payload, dict) else None
+    if not isinstance(suggestions, list):
+        return None
+    allowed_actions = interaction.actions
+    matches: list[dict[str, Any]] = []
+    for suggestion in suggestions:
+        if not isinstance(suggestion, dict) or not isinstance(suggestion.get("action"), dict):
+            continue
+        action = dict(suggestion["action"])
+        if action not in allowed_actions:
+            continue
+        visible_text = {
+            _choice_text(str(suggestion.get(field) or ""))
+            for field in ("label", "text")
+        }
+        visible_text.discard("")
+        if normalized_customer_text in visible_text:
+            matches.append(action)
+    if len(matches) == 1:
+        return matches[0]
+    return _natural_choice_action(
+        normalized_customer_text,
+        suggestions,
+        allowed_actions,
+        interaction.prompt,
+    )
+
+
+def _choice_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(re.findall(r"[a-z0-9]+", normalized))
+
+
+_CHOICE_FILLER_WORDS = {
+    "a",
+    "an",
+    "book",
+    "booking",
+    "can",
+    "choose",
+    "could",
+    "for",
+    "i",
+    "like",
+    "me",
+    "my",
+    "need",
+    "option",
+    "please",
+    "select",
+    "show",
+    "the",
+    "to",
+    "use",
+    "want",
+    "would",
+}
+
+_CHOICE_NEGATIONS = {"avoid", "never", "no", "not", "without"}
+
+
+def _natural_choice_action(
+    normalized_customer_text: str,
+    suggestions: list[Any],
+    allowed_actions: list[dict[str, Any]],
+    prompt: str,
+) -> dict[str, Any] | None:
+    """Match a unique trusted option while refusing negated or ambiguous replies."""
+    if not allowed_actions:
+        return None
+    raw_customer_words = normalized_customer_text.split()
+    if _has_choice_negation(raw_customer_words):
+        return None
+    customer_terms = _choice_terms(normalized_customer_text) - _choice_terms(
+        _choice_text(prompt)
+    )
+    if not customer_terms:
+        return None
+
+    candidates: list[tuple[dict[str, Any], set[str]]] = []
+    for suggestion in suggestions:
+        if not isinstance(suggestion, dict) or not isinstance(suggestion.get("action"), dict):
+            continue
+        action = dict(suggestion["action"])
+        if action not in allowed_actions:
+            continue
+        visible_terms = _choice_terms(
+            " ".join(
+                _choice_text(str(suggestion.get(field) or ""))
+                for field in ("label", "text")
+            )
+        )
+        if visible_terms:
+            candidates.append((action, visible_terms))
+
+    term_frequency: dict[str, int] = {}
+    for _action, terms in candidates:
+        for term in terms:
+            term_frequency[term] = term_frequency.get(term, 0) + 1
+
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for action, visible_terms in candidates:
+        matched_terms = customer_terms & visible_terms
+        unique_terms = {term for term in matched_terms if term_frequency[term] == 1}
+        if unique_terms:
+            scored.append((len(matched_terms), action))
+
+    if not scored:
+        return None
+    best_score = max(score for score, _action in scored)
+    best_actions = [action for score, action in scored if score == best_score]
+    return best_actions[0] if len(best_actions) == 1 else None
+
+
+def _choice_terms(value: str) -> set[str]:
+    aliases = {
+        "automatics": "automatic",
+        "callback": "call",
+        "callbacks": "call",
+        "fitted": "fit",
+        "fitting": "fit",
+        "messages": "message",
+        "tire": "tyre",
+        "tires": "tyre",
+        "tyres": "tyre",
+    }
+    terms: set[str] = set()
+    for word in value.split():
+        canonical = aliases.get(word, word)
+        if canonical not in _CHOICE_FILLER_WORDS:
+            terms.add(canonical)
+    return terms
+
+
+def _has_choice_negation(words: list[str]) -> bool:
+    return bool(_CHOICE_NEGATIONS.intersection(words)) or any(
+        words[index : index + 2] == ["don", "t"]
+        for index in range(max(0, len(words) - 1))
+    )

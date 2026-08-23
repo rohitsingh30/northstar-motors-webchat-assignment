@@ -282,6 +282,88 @@ def test_pending_single_action_and_choice_are_provider_independent(tmp_path: Pat
     assert provider.calls == 3
 
 
+def test_exact_visible_workshop_choice_bypasses_the_provider(tmp_path: Path) -> None:
+    class WorkshopProvider:
+        requires_review = False
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            del messages
+            self.calls += 1
+            if self.calls > 1:
+                raise AssertionError("An exact application-owned choice must not call the model")
+            return ProviderReply(
+                "",
+                tool_calls=direct_tool_calls("list_service_types"),
+            )
+
+    class WorkshopGateway:
+        async def list_service_types(self):
+            return {
+                "items": [
+                    {
+                        "id": "full-service",
+                        "name": "Full service",
+                        "description": "A comprehensive annual service.",
+                        "durationMinutes": 180,
+                        "priceFromPence": 29900,
+                    },
+                    {"id": "mot", "name": "MOT"},
+                ]
+            }
+
+        async def list_workshop_slots(self, filters):
+            assert filters["serviceTypeId"] == "full-service"
+            assert "dateFrom" in filters
+            return {
+                "items": [
+                    {
+                        "id": "ws-slot-0001",
+                        "serviceTypeId": "full-service",
+                        "serviceName": "Full service",
+                        "dealershipId": "dealer-stockport",
+                        "dealershipName": "Northstar Stockport",
+                        "startsAt": "2026-08-25T17:00:00+01:00",
+                        "endsAt": "2026-08-25T20:00:00+01:00",
+                    }
+                ]
+            }
+
+    provider = WorkshopProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        browser.app.state.orchestrator.tools = ApplicationToolExecutor(WorkshopGateway())
+        conversation_id = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()["conversationId"]
+        first = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "I want to book a workshop appointment",
+                "pageContext": CONTEXT,
+            },
+        )
+        selected = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "full service",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert first.json()["messages"][1]["viewType"] == "service_list"
+    assert selected.json()["status"] == "completed"
+    assert selected.json()["messages"][1]["viewType"] == "slot_list"
+    assert provider.calls == 1
+
+
 def test_pending_interaction_does_not_capture_a_new_explicit_request(tmp_path: Path) -> None:
     class PromptProvider:
         requires_review = False
@@ -3051,6 +3133,106 @@ def test_dealership_workshop_action_returns_services_in_the_next_message(
             {"dealershipId": "northstar-bolton"},
             conversation_id,
         )
+    ]
+
+
+def test_natural_service_choice_keeps_the_selected_dealership_and_opens_slots(
+    tmp_path: Path,
+) -> None:
+    class UnexpectedProvider:
+        async def generate_turn(self, messages):
+            raise AssertionError("A uniquely identified typed choice must not call the model")
+
+    class FakeTools:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, name, arguments, conversation_id):
+            assert name == "list_workshop_slots"
+            self.calls.append((arguments, conversation_id))
+            if arguments == {"dealershipId": "northstar-stockport"}:
+                services = [
+                    {"id": "full-service", "name": "Full service"},
+                    {"id": "interim-service", "name": "Interim service"},
+                    {"id": "manufacturer-recall", "name": "Manufacturer recall"},
+                    {"id": "tyre-fitting", "name": "Tyre fitting"},
+                ]
+                suggestions = [
+                    {
+                        "label": service["name"],
+                        "text": f"Book service: {service['name']}",
+                        "action": {
+                            "type": "try_workshop_location",
+                            "serviceTypeId": service["id"],
+                            "dealershipId": "northstar-stockport",
+                        },
+                    }
+                    for service in services
+                ]
+                payload = {
+                    "version": 1,
+                    "dealershipId": "northstar-stockport",
+                    "items": services,
+                    "suggestions": suggestions,
+                }
+                return ToolResult("Choose a service.", "service_list", payload, payload)
+            assert arguments == {
+                "serviceTypeId": "tyre-fitting",
+                "dealershipId": "northstar-stockport",
+            }
+            payload = {
+                "version": 1,
+                "items": [
+                    {
+                        "id": "ws-slot-stockport-tyre",
+                        "serviceTypeId": "tyre-fitting",
+                        "dealershipId": "northstar-stockport",
+                    }
+                ],
+            }
+            return ToolResult("Found 1 result.", "slot_list", payload, payload)
+
+    settings = Settings(environment="test", webchat_database_path=tmp_path / "webchat.sqlite3")
+    with TestClient(create_app(settings, provider=UnexpectedProvider())) as browser:
+        created = browser.post("/api/chat/v1/conversations", json={"pageContext": CONTEXT})
+        conversation_id = created.json()["conversationId"]
+        tools = FakeTools()
+        browser.app.state.orchestrator.tools = tools
+
+        services = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "Book a service at Northstar Stockport",
+                "pageContext": CONTEXT,
+                "action": {
+                    "type": "start_dealership_workshop",
+                    "dealershipId": "northstar-stockport",
+                },
+            },
+        )
+        slots = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "I want to book tyre service",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert services.status_code == 200
+    assert services.json()["messages"][1]["viewType"] == "service_list"
+    assert slots.status_code == 200
+    assert slots.json()["messages"][1]["viewType"] == "slot_list"
+    assert tools.calls == [
+        ({"dealershipId": "northstar-stockport"}, conversation_id),
+        (
+            {
+                "serviceTypeId": "tyre-fitting",
+                "dealershipId": "northstar-stockport",
+            },
+            conversation_id,
+        ),
     ]
 
 

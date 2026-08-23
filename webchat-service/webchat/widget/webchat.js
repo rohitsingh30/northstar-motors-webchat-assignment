@@ -56,6 +56,21 @@ export function createWebchat(root = document, options = {}) {
   const retryTurns = new Map();
   const formProfile = createFormProfile(transcript);
 
+  function scrollTranscriptToEnd() {
+    transcript.scrollTop = transcript.scrollHeight;
+  }
+
+  function revealInTranscript(element) {
+    if (!element || !transcript.contains(element)) return;
+    const viewport = transcript.getBoundingClientRect();
+    const target = element.getBoundingClientRect();
+    if (target.bottom > viewport.bottom) {
+      transcript.scrollTop += target.bottom - viewport.bottom;
+    } else if (target.top < viewport.top) {
+      transcript.scrollTop -= viewport.top - target.top;
+    }
+  }
+
   function setStarterSuggestionsVisible(visible) {
     starterSuggestions.hidden = !visible;
     if (!starterSuggestions.childElementCount) {
@@ -129,7 +144,7 @@ export function createWebchat(root = document, options = {}) {
     try {
       await refreshHistory();
       clearPending();
-      historyList.querySelector("button")?.focus();
+      historyList.querySelector("button")?.focus({ preventScroll: true });
     } catch (error) {
       showRequestError(error);
     }
@@ -177,7 +192,9 @@ export function createWebchat(root = document, options = {}) {
   }
 
   function focusOfferEnquiry(flow) {
-    flow?.querySelector("select, textarea, input, button, a, [tabindex]")?.focus();
+    flow
+      ?.querySelector("select, textarea, input, button, a, [tabindex]")
+      ?.focus({ preventScroll: true });
   }
 
   function replaceMessages(messages) {
@@ -185,14 +202,14 @@ export function createWebchat(root = document, options = {}) {
     restoreBookedTestDriveActions(messages);
     setStarterSuggestionsVisible(messages.length === 0);
     historyPanel.hidden = messages.length > 0;
-    transcript.lastElementChild?.scrollIntoView({ block: "nearest" });
+    scrollTranscriptToEnd();
   }
 
   function appendMessage(message) {
     setStarterSuggestionsVisible(false);
     transcript.append(renderMessage(message));
     if (message.role === "user") historyPanel.hidden = true;
-    transcript.lastElementChild?.scrollIntoView({ block: "nearest" });
+    scrollTranscriptToEnd();
   }
 
   function appendTestDriveFlowMessage(button, view) {
@@ -249,7 +266,7 @@ export function createWebchat(root = document, options = {}) {
       ? kind === "workshop" ? "Hide workshop booking" : "Hide test-drive booking"
       : kind === "workshop" ? "View workshop booking" : "View test-drive booking";
     launch.setAttribute("aria-expanded", String(visible));
-    if (visible) message?.scrollIntoView({ block: "nearest" });
+    if (visible) revealInTranscript(message);
   }
 
   function setOfferEnquiryVisible(
@@ -262,7 +279,7 @@ export function createWebchat(root = document, options = {}) {
     if (flow) flow.hidden = false;
     setOfferEnquiryActionState(flow, visible, hasEnquiry);
     if (visible) {
-      message?.scrollIntoView({ block: "nearest" });
+      revealInTranscript(message);
       focusOfferEnquiry(flow);
     }
   }
@@ -401,7 +418,7 @@ export function createWebchat(root = document, options = {}) {
     item.append(retry);
     setStarterSuggestionsVisible(false);
     transcript.append(item);
-    transcript.lastElementChild?.scrollIntoView({ block: "nearest" });
+    scrollTranscriptToEnd();
   }
 
   async function cancelInlineTestDrive(button) {

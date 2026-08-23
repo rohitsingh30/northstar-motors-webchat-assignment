@@ -50,6 +50,7 @@
   margin: 0;
   padding: 0;
   overflow: hidden;
+  overscroll-behavior: contain;
   border: 0;
   border-left: 1px solid #dde3e1;
   border-radius: 0;
@@ -87,7 +88,7 @@
 .webchat-history-row strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .webchat-history-row span { color: var(--webchat-muted); font-size: 10px; }
 .webchat-history-empty { padding: 18px 10px; color: var(--webchat-muted); font-size: 12px; text-align: center; }
-.webchat-transcript { grid-row: 3; display: grid; align-content: start; gap: 10px; min-height: 0; overflow-y: auto; margin: 0; padding: 16px; list-style: none; background: #fbfcfa; }
+.webchat-transcript { grid-row: 3; display: grid; align-content: start; gap: 10px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; margin: 0; padding: 16px; list-style: none; background: #fbfcfa; }
 .webchat-message { max-width: 92%; padding: 8px 0; color: var(--webchat-ink); font-size: 14px; line-height: 1.5; }
 .webchat-message--rich { width: 100%; max-width: 100%; }
 .webchat-message p { margin: 0; }

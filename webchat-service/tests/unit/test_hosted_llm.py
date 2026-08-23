@@ -858,7 +858,55 @@ async def test_reviewer_failure_closes_before_any_business_tool() -> None:
         with pytest.raises(ReviewUnavailableError, match="review unavailable"):
             await provider(http).generate_turn(messages("show me cars"))
 
-    assert calls == 3
+    assert calls == 4
+
+
+@pytest.mark.asyncio
+async def test_reviewer_recovers_on_the_third_bounded_attempt() -> None:
+    calls = 0
+    reviewer_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls, reviewer_calls
+        calls += 1
+        body = json.loads(request.content)
+        if body["parallel_tool_calls"] is True:
+            return httpx.Response(200, json=function_call("search_vehicles", {}))
+        reviewer_calls += 1
+        if reviewer_calls < 3:
+            return httpx.Response(503, json={"error": "review unavailable"})
+        return httpx.Response(200, json=accepted_review())
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://provider.example/v1"
+    ) as http:
+        reply = await provider(http).generate_turn(messages("show me cars"))
+
+    assert reply.tool_calls[0].name == "search_vehicles"
+    assert calls == 4
+
+
+@pytest.mark.asyncio
+async def test_planner_recovers_once_from_a_malformed_response() -> None:
+    planner_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal planner_calls
+        body = json.loads(request.content)
+        if body["parallel_tool_calls"] is True:
+            planner_calls += 1
+            if planner_calls == 1:
+                return httpx.Response(200, json={"output": []})
+            return httpx.Response(200, json=function_call("search_vehicles", {}))
+        return httpx.Response(200, json=accepted_review())
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://provider.example/v1"
+    ) as http:
+        reply = await provider(http).generate_turn(messages("show me cars"))
+
+    assert reply.tool_calls[0].name == "search_vehicles"
+    assert planner_calls == 2
 
 
 @pytest.mark.asyncio

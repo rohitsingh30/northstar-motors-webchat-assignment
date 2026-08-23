@@ -50,6 +50,9 @@ from .review import (
 
 logger = logging.getLogger(__name__)
 
+PLANNER_ATTEMPTS = 2
+REVIEW_ATTEMPTS = 3
+
 class HostedLlmProvider:
     """Provider-neutral Responses adapter with independent proposal review."""
 
@@ -88,30 +91,8 @@ class HostedLlmProvider:
         candidates = _retrieve_candidates(self.retriever, context)
         retrieval_ms = _elapsed_ms(retrieval_started)
         planner_started = perf_counter()
-        try:
-            response = await self._client.post(
-                "/responses",
-                headers=self._headers(),
-                json=self._planner_request_payload(messages, candidates, context),
-            )
-        except httpx.TimeoutException as error:
-            logger.warning(
-                "hosted planner request timed out",
-                extra={
-                    "context": {
-                        "stage": "planner",
-                        "duration_ms": _elapsed_ms(planner_started),
-                        "candidate_tools": [definition.id for definition in candidates.tools],
-                        "candidate_knowledge_count": len(candidates.knowledge),
-                    }
-                },
-            )
-            raise TimeoutError("hosted planner request timed out") from error
-        response.raise_for_status()
+        candidate = await self._plan_with_recovery(messages, candidates, context)
         planner_ms = _elapsed_ms(planner_started)
-        candidate = _parse_proposal(
-            response.json(), candidates, self.catalogue, context.pending_interaction
-        )
         review_started = perf_counter()
         try:
             reviewed, review = await self._review(candidate, context, candidates)
@@ -132,6 +113,59 @@ class HostedLlmProvider:
         )
         return _provider_reply(reviewed, review, candidates)
 
+    async def _plan_with_recovery(
+        self,
+        messages: SemanticMessages,
+        candidates: CandidateSet,
+        context: ReviewerContext,
+    ) -> TurnProposal:
+        last_error: Exception | None = None
+        for attempt in range(1, PLANNER_ATTEMPTS + 1):
+            request_started = perf_counter()
+            try:
+                response = await self._client.post(
+                    "/responses",
+                    headers=self._headers(),
+                    json=self._planner_request_payload(messages, candidates, context),
+                )
+                response.raise_for_status()
+                return _parse_proposal(
+                    response.json(), candidates, self.catalogue, context.pending_interaction
+                )
+            except httpx.TimeoutException as error:
+                logger.warning(
+                    "hosted planner request timed out",
+                    extra={
+                        "context": {
+                            "stage": "planner",
+                            "attempt": attempt,
+                            "duration_ms": _elapsed_ms(request_started),
+                            "candidate_tools": [
+                                definition.id for definition in candidates.tools
+                            ],
+                            "candidate_knowledge_count": len(candidates.knowledge),
+                        }
+                    },
+                )
+                raise TimeoutError("hosted planner request timed out") from error
+            except (httpx.HTTPError, TypeError, ValueError, KeyError) as error:
+                last_error = error
+                retryable = _retryable_planner_error(error)
+                logger.warning(
+                    "hosted planner response failed validation",
+                    extra={
+                        "context": {
+                            "attempt": attempt,
+                            "retrying": retryable and attempt < PLANNER_ATTEMPTS,
+                            "error_type": type(error).__name__,
+                        }
+                    },
+                )
+                if not retryable or attempt == PLANNER_ATTEMPTS:
+                    raise
+        assert last_error is not None
+        raise last_error
+
     async def _review(
         self,
         candidate: TurnProposal,
@@ -144,7 +178,7 @@ class HostedLlmProvider:
         customer_evidence = {
             entry.id: entry.text for entry in candidates.knowledge if entry.audience == "customer"
         }
-        for _ in range(2):
+        for attempt in range(1, REVIEW_ATTEMPTS + 1):
             selected_review_tool: str | None = None
             try:
                 response = await self._client.post(
@@ -182,6 +216,7 @@ class HostedLlmProvider:
                     extra={
                         "context": {
                             "validation_feedback": validation_feedback,
+                            "attempt": attempt,
                             "review_function": selected_review_tool,
                             "candidate_tools": [call.name for call in candidate.tool_calls],
                             "repair_functions": sorted(allowed_review_tools),
@@ -276,6 +311,14 @@ def _required_value(label: str, value: str) -> str:
 
 def _elapsed_ms(started: float) -> int:
     return round((perf_counter() - started) * 1_000)
+
+
+def _retryable_planner_error(error: Exception) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in {408, 409, 425, 429} or (
+            error.response.status_code >= 500
+        )
+    return isinstance(error, (httpx.TransportError, TypeError, ValueError, KeyError))
 
 
 def _provider_base_url(value: str) -> str:

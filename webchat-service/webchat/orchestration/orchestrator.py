@@ -9,6 +9,7 @@ from webchat.domain.interactions import (
     PendingInteraction,
     interaction_from_view,
     preceding_interaction,
+    selected_choice_action,
 )
 from webchat.integrations.contracts import LlmProvider, ReviewUnavailableError
 from webchat.orchestration.catalogue import UnifiedToolCatalog
@@ -114,6 +115,13 @@ class Orchestrator:
         context = self.history_builder.build(conversation_id, conversation_messages, action)
         action_result = await self._structured_action_result(
             action, conversation_id, conversation_messages, context
+        )
+        if action_result is not None:
+            return self._finish_tool_turn(conversation_id, turn_id, action_result)
+
+        choice_action = selected_choice_action(conversation_messages)
+        action_result = await self._structured_action_result(
+            choice_action, conversation_id, conversation_messages, context
         )
         if action_result is not None:
             return self._finish_tool_turn(conversation_id, turn_id, action_result)

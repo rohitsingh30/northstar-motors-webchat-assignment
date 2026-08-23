@@ -2,25 +2,6 @@
 import { setPageContext } from "./core/context.js";
 import { createWebchat } from "./webchat.js";
 
-const HOST_STYLE_ID = "northstar-chat-host-style";
-
-function installHostStyle() {
-  if (document.getElementById(HOST_STYLE_ID)) return;
-  const style = document.createElement("style");
-  style.id = HOST_STYLE_ID;
-  style.textContent = `
-    @media (min-width: 800px) {
-      html[data-northstar-chat-open] body {
-        margin-right: var(--northstar-chat-panel-width, 380px);
-      }
-    }
-    @media (prefers-reduced-motion: no-preference) and (min-width: 800px) {
-      body { transition: margin-right 180ms ease; }
-    }
-  `;
-  document.head.append(style);
-}
-
 const template = document.createElement("template");
 template.innerHTML = `
   <link rel="stylesheet" href="${new URL("./webchat.css", import.meta.url).href}" />
@@ -75,18 +56,11 @@ template.innerHTML = `
 export class NorthstarChatWidget extends HTMLElement {
   connectedCallback() {
     if (this.controller) return;
-    installHostStyle();
     const root = this.attachShadow({ mode: "open" });
     root.append(template.content.cloneNode(true));
     this.controller = createWebchat(root, {
       apiBase: this.getAttribute("api-base") || undefined,
-      onOpen: () => document.documentElement.setAttribute("data-northstar-chat-open", ""),
-      onClose: () => document.documentElement.removeAttribute("data-northstar-chat-open"),
     });
-  }
-
-  disconnectedCallback() {
-    document.documentElement.removeAttribute("data-northstar-chat-open");
   }
 
   open() {

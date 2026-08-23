@@ -14,6 +14,7 @@ automation dependency.
 | [`test_opening_hours_card.mjs`](./test_opening_hours_card.mjs) | Holiday-only opening-hours cards without unrelated weekday schedules |
 | [`test_progress_indicator.mjs`](./test_progress_indicator.mjs) | Honest indeterminate request progress without fabricated percentages |
 | [`test_recovery.mjs`](./test_recovery.mjs) | Slot/vehicle/field recovery classification and definitive versus indeterminate turn retries |
+| [`test_scroll_isolation.mjs`](./test_scroll_isolation.mjs) | Transcript-only automatic scrolling, contained scroll momentum, and no host-page reflow |
 | [`test_suggestions.mjs`](./test_suggestions.mjs) | Two-or-four follow-up rendering, complete service choices, active filters, and typed actions |
 | [`test_test_drive_toggle.mjs`](./test_test_drive_toggle.mjs) | Booked test-drive disclosure labelling, controls, and expanded/collapsed toggle states |
 | [`test_workshop_booking_card.mjs`](./test_workshop_booking_card.mjs) | Confirmed workshop booking hierarchy, structured details, and retained actions |

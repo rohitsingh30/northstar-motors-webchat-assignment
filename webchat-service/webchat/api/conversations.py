@@ -22,7 +22,7 @@ TURN_FAILURES = {
     },
     "LLM_INVALID_RESPONSE": {
         "code": "LLM_INVALID_RESPONSE",
-        "message": "The AI service could not complete that response safely. Please retry.",
+        "message": "The AI service hit a temporary response error. Please retry.",
         "retryable": True,
     },
     "LLM_REVIEW_FAILED": {

@@ -72,6 +72,10 @@ case "${TUNNEL_MODE}" in
 esac
 unset access_token
 
+# Nginx resolves Compose service names when it starts. Recreate it after every
+# application rollout so it cannot retain an IP from a replaced container.
+"${compose[@]}" up -d --no-deps --force-recreate gateway
+
 for _ in {1..30}; do
   if curl -fsS "${reviewer_origin}/_health" >/dev/null; then
     printf 'Northstar review URL (%s tunnel): %s\n' "${TUNNEL_MODE}" "${reviewer_origin}"
