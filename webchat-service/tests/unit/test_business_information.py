@@ -1,7 +1,8 @@
 import pytest
 
+from webchat.orchestration.tools.business import BusinessInformationToolHandler
 from webchat.orchestration.tools.business_information import BusinessInformationResolver
-from webchat.orchestration.tools.catalog import CatalogueToolHandler
+from webchat.orchestration.tools.dealerships import DealershipToolHandler
 
 BUSINESS_INFORMATION = {
     "organisation": "Northstar Motors",
@@ -11,9 +12,7 @@ BUSINESS_INFORMATION = {
         "notice": "Finance is subject to status. Northstar is a broker, not a lender.",
         "minimumAge": 18,
     },
-    "partExchange": {
-        "estimateNotice": "Estimates are indicative and subject to inspection."
-    },
+    "partExchange": {"estimateNotice": "Estimates are indicative and subject to inspection."},
     "privacyContact": "privacy@northstarmotors.example",
 }
 
@@ -73,7 +72,7 @@ def test_wrong_business_goal_cannot_leak_another_topic() -> None:
 
 @pytest.mark.asyncio
 async def test_matched_business_tool_returns_only_the_selected_fact() -> None:
-    result = await CatalogueToolHandler(BusinessGateway()).execute(
+    result = await BusinessInformationToolHandler(BusinessGateway()).execute(
         "get_business_information",
         {
             "topic": "privacy",
@@ -101,7 +100,7 @@ async def test_matched_business_tool_returns_only_the_selected_fact() -> None:
 
 @pytest.mark.asyncio
 async def test_unanswerable_business_tool_fails_closed_without_a_card() -> None:
-    result = await CatalogueToolHandler(BusinessGateway()).execute(
+    result = await BusinessInformationToolHandler(BusinessGateway()).execute(
         "get_business_information",
         {
             "topic": "part_exchange",
@@ -117,3 +116,20 @@ async def test_unanswerable_business_tool_fails_closed_without_a_card() -> None:
         "factKeys": [],
     }
     assert "don't have confirmed Northstar information" in result.text
+
+
+@pytest.mark.asyncio
+async def test_dealership_contact_options_are_an_application_owned_chooser() -> None:
+    result = await DealershipToolHandler(BusinessGateway()).execute(
+        "show_dealership_contact_options", {}
+    )
+
+    assert result.view_type == "suggestion_list"
+    assert result.text == "Choose how you'd like to contact a Northstar dealership."
+    assert len(result.view_payload["suggestions"]) == 4
+    assert result.facts["options"] == [
+        "start_callback",
+        "start_dealership_message",
+        "show_dealerships",
+        "show_opening_hours",
+    ]

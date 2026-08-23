@@ -8,40 +8,6 @@ from typing import Any, Literal
 
 ServiceResolutionStatus = Literal["matched", "ambiguous", "unsupported"]
 
-_GENERIC_WORDS = {
-    "a",
-    "an",
-    "appointment",
-    "available",
-    "book",
-    "booking",
-    "can",
-    "cost",
-    "does",
-    "do",
-    "find",
-    "for",
-    "how",
-    "i",
-    "is",
-    "it",
-    "me",
-    "much",
-    "need",
-    "please",
-    "price",
-    "schedule",
-    "service",
-    "supported",
-    "the",
-    "times",
-    "to",
-    "want",
-    "what",
-    "workshop",
-    "you",
-}
-
 
 @dataclass(frozen=True)
 class ServiceResolution:
@@ -51,13 +17,11 @@ class ServiceResolution:
     candidates: tuple[dict[str, Any], ...] = ()
 
 
-def resolve_live_service(
-    items: list[dict[str, Any]], text: str
-) -> ServiceResolution:
+def resolve_live_service(items: list[dict[str, Any]], text: str) -> ServiceResolution:
     """Return an explicit resolution outcome using only the current catalogue."""
 
     normalized_text = _normalized(text)
-    target_tokens = _tokens(text) - _GENERIC_WORDS
+    target_tokens = _tokens(text)
     ranked: list[tuple[int, int, dict[str, Any]]] = []
     for item in items:
         name = str(item.get("name") or "").strip()
@@ -66,14 +30,8 @@ def resolve_live_service(
         normalized_name = _normalized(name)
         exact = bool(normalized_name and f" {normalized_name} " in f" {normalized_text} ")
         name_overlap = target_tokens & _tokens(name)
-        description_overlap = target_tokens & _tokens(
-            str(item.get("description") or "")
-        )
-        score = (
-            (100 if exact else 0)
-            + len(name_overlap) * 10
-            + len(description_overlap) * 3
-        )
+        description_overlap = target_tokens & _tokens(str(item.get("description") or ""))
+        score = (100 if exact else 0) + len(name_overlap) * 10 + len(description_overlap) * 3
         if score:
             ranked.append((score, len(normalized_name), item))
     if not ranked:
@@ -91,9 +49,7 @@ def _tokens(value: str) -> set[str]:
 
 
 def _normalized(value: str) -> str:
-    return " ".join(
-        _singular(token) for token in re.findall(r"[a-z0-9]+", value.lower())
-    )
+    return " ".join(_singular(token) for token in re.findall(r"[a-z0-9]+", value.lower()))
 
 
 def _singular(token: str) -> str:

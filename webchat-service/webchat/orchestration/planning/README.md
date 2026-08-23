@@ -1,43 +1,35 @@
-# Planning package
+# Proposal and review contracts
 
-Planning converts a semantic domain and goal into deterministic application transitions. It is the boundary
-between probabilistic language understanding and exact business-tool execution.
-
-## Files
+This package contains only hosted semantic policies and the independent review contract. Concrete
+tool definitions belong to `../catalogue/`; workflow state belongs to `../state.py`.
 
 | File | Responsibility |
 | --- | --- |
-| `__init__.py` | Package marker |
-| [`conformance.py`](./conformance.py) | Application-owned evidence rules that prevent a schema-valid vehicle-search plan from executing without an inventory-discovery request |
-| [`ontology.py`](./ontology.py) | Canonical `GoalKey` values, full supported goal set, V1 persisted-state adapter, and V2 workflow-state constructor |
-| [`plan_policy.py`](./plan_policy.py) | Observe/enforce policy for provider conversation responses, deterministic fallback, one re-plan, and safe clarification |
-| [`prompt.py`](./prompt.py) | Compact hosted planner policy, domain responsibilities, privacy, reference, and grounding rules |
-| [`turn_plan.py`](./turn_plan.py) | Domain-discriminated `TurnPlanPayload` union, goal-specific arguments, provider tool definition, parser |
-| [`transitions.py`](./transitions.py) | `TransitionController`, workflow state ownership, reference resolution, clarification, state advancement |
-| [`tool_routes.py`](./tool_routes.py) | Route map from canonical `GoalKey` values to exact filtered application tool calls |
+| `__init__.py` | Public exports |
+| `prompt.py` | Planner and reviewer system policies; inject retrieved evidence |
+| `review.py` | Outcome-specific review functions, citations, deterministic revalidation, safe fallback |
 
-## Design rules
+The planner must call a retrieved business tool, `answer_from_knowledge`, `respond_socially`, or a
+pending-interaction accept/decline capability exposed only when an actionable interaction exists.
+Knowledge answers are materialized from selected customer evidence, while social replies come from
+fixed application copy; the planner cannot author arbitrary customer text or clarification. The
+reviewer is a separate stateless provider request with a different prompt, envelope, and four small
+outcome-specific functions. It sees the complete executable catalogue and may correct a missed
+first-pass candidate.
 
-- The provider emits `version`, `domain`, `goal`, and domain-specific arguments—not arbitrary business tool calls.
-- Invalid domain-goal pairs and cross-domain/unknown arguments fail schema validation.
-- A vehicle noun or provider-default sort is not enough to execute an inventory search; the turn
-  must contain a substantive typed search constraint, explicit discovery wording, or a grounded
-  current-result reference.
-- A `choose_preferences` plan that already contains a concrete stock constraint is normalized to
-  `vehicle.search`; the preference picker cannot hide or discard an executable filter.
-- `conversation.respond` is not sufficient for a business-looking request when policy enforcement is enabled.
-- A gate-triggered re-plan happens at most once; repeated prose fails to a server-owned clarification.
-- New workflow state is always V2 `{version, domain, goal, stage, entities, constraints}`; V1 `intent`
-  values are accepted only by the persistence-boundary adapter.
-- A new task does not silently inherit stale workflow entities or filters.
-- Explicit references may reuse active entities; implicit reuse is rejected.
-- Offer purchase interest maps to `offer.enquire`, never reserved-stock interest.
-- Workshop information remains distinct from workshop booking.
-- Named-service checks resolve against the live service catalogue and return explicit matched,
-  ambiguous, or unsupported outcomes; they never silently become a full-catalogue response.
-- Referential location follow-ups keep the active workshop service and strip conversational text
-  from the town before tool execution.
-- Transition outputs are `PlannedTransition` values; execution happens elsewhere.
+Rules:
 
-Primary tests are `tests/unit/test_transitions.py` and
-`tests/integration/test_structured_flow_contracts.py`.
+- No hosted proposal executes without `ProposalReview` provenance.
+- Corrected calls pass through catalogue schema and risk validation again.
+- Text citations must refer to retrieved customer-audience evidence; the application owns the text.
+- Reviewer clarification must identify exact required schema fields or declared preconditions.
+- Finite clarification choices are explicit structured options; selecting one starts another fully
+  reviewed turn and never bypasses tool policy.
+- Interaction decisions require persisted metadata from the immediately preceding assistant
+  response. They contain no action arguments; the server resolves only the stored typed action.
+- The reviewer cannot execute tools or confirm operations.
+- Invalid review output receives precise deterministic feedback and one repair attempt. When a
+  clarification cites optional input or an undeclared precondition, the repair request exposes only
+  the correction branch, preventing the reviewer from repeating or relabelling the invalid outcome.
+- Failure to obtain a valid review fails the turn with retryable `LLM_REVIEW_FAILED`; it is never
+  persisted as a successful customer clarification.

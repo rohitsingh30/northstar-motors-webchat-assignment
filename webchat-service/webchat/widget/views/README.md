@@ -7,10 +7,16 @@ network requests or own conversation state.
 
 | File | Responsibility |
 | --- | --- |
-| [`message.js`](./message.js) | View-type renderer registry; vehicle lists/details, slots, forms, confirmations, receipts, offers, dealerships, hours, services, booking details, scoped business facts, and restored version-1 business cards |
+| [`message.js`](./message.js) | Small closed view-type dispatcher and stable public facade |
 | [`message-content.js`](./message-content.js) | Safe assistant text grouping into paragraphs and explicit list presentation |
 | [`suggestions.js`](./suggestions.js) | Balanced suggestion chips and typed action data |
 | [`vehicle.js`](./vehicle.js) | Vehicle card, availability card, image/navigation behavior, comparison table |
+| [`appointments.js`](./appointments.js) | Test-drive/workshop slot pickers, detail forms, inline confirmations, and booking disclosures |
+| [`information-cards.js`](./information-cards.js) | Offers, dealerships, hours, services, and generic read-only facts |
+| [`workflow-forms.js`](./workflow-forms.js) | Collecting-state forms and draft cards |
+| [`workflow-confirmations.js`](./workflow-confirmations.js) | Application-owned protected-write review cards |
+| [`workflow-receipts.js`](./workflow-receipts.js) | Public receipts, private lookup form, and restored booking views |
+| [`workflow-cards.js`](./workflow-cards.js) | Stable workflow-renderer facade |
 
 ## Adding a view
 
@@ -21,6 +27,5 @@ network requests or own conversation state.
 5. Use DOM properties, validated IDs, and controlled navigation; never model HTML.
 6. Add integration coverage and a manual accessibility/browser check.
 
-`message.js` remains the largest renderer module because it owns many form/card families. Prefer a
-new focused view module when adding another substantial family rather than expanding unrelated
-conditionals.
+Add behavior to the owning family module. `message.js` should remain limited to dispatch and stable
+exports; it must not accumulate card or form implementation details.

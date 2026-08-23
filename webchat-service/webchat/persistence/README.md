@@ -9,7 +9,7 @@ orchestration, widget, or integration modules.
 | --- | --- |
 | `__init__.py` | Package marker |
 | [`database.py`](./database.py) | SQLite connections, foreign keys, busy timeout, WAL migrations, `BEGIN IMMEDIATE` transactions |
-| [`repositories.py`](./repositories.py) | Conversation/session, message, turn, draft, attempt, receipt, and verified-grant repositories |
+| [`repositories/`](./repositories) | Stable repository facade with one module per persisted aggregate |
 | [`migrations/`](./migrations/README.md) | Ordered immutable SQL schema migrations |
 
 ## Repository ownership
@@ -20,6 +20,9 @@ orchestration, widget, or integration modules.
 | `MessageRepository` | Ordered messages, per-turn reads, draft-card replacement with receipt |
 | `TurnRepository` | Client-message deduplication and running/completed/failed state |
 | `WorkflowRepository` | Draft replacement/status, operation attempts, idempotency keys, receipts, verified grants |
+
+Callers import repositories from `webchat.persistence.repositories`; the package facade keeps that
+boundary stable while SQL remains grouped by aggregate.
 
 ## Rules
 

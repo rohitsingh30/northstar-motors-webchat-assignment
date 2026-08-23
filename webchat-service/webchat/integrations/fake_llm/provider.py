@@ -1,31 +1,25 @@
 from typing import Any
 
-from webchat.orchestration.planning.turn_plan import parse_turn_plan
-
 from ..contracts import LlmProvider, ProviderReply, ToolCall
-from .planner import DeterministicTurnPlanner
+from .planner import DeterministicToolPlanner
 
 
 class FakeLlmProvider:
-    """Deterministic fake provider with the same validated plan boundary as OpenAI."""
+    """Deterministic fake provider with the hosted provider's direct-tool boundary."""
+
+    requires_review = False
 
     def __init__(self, planner: LlmProvider | None = None) -> None:
-        self._planner = planner if planner is not None else DeterministicTurnPlanner()
+        self._planner = planner if planner is not None else DeterministicToolPlanner()
 
     async def generate_turn(self, messages: list[dict[str, Any]]) -> ProviderReply:
         reply = await self._planner.generate_turn(messages)
-        if reply.plan is None or reply.tool_calls:
-            raise ValueError("fake provider must return exactly one typed turn plan")
-        plan = parse_turn_plan(
-            {
-                "version": reply.plan.version,
-                "domain": reply.plan.domain,
-                "goal": reply.plan.goal,
-                "response": reply.plan.response or None,
-                **reply.plan.arguments,
-            }
+        branches = bool(reply.tool_calls) + bool(reply.text.strip()) + bool(
+            reply.interaction_decision
         )
-        return ProviderReply(text=reply.text, plan=plan)
+        if len(reply.tool_calls) > 4 or branches != 1:
+            raise ValueError("fake provider returned an invalid direct proposal")
+        return reply
 
 
 __all__ = ["FakeLlmProvider", "LlmProvider", "ProviderReply", "ToolCall"]

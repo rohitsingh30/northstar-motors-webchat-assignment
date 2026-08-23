@@ -9,9 +9,9 @@ mounts an isolated `<northstar-chat>` web component.
 | --- | --- |
 | [`embed.js`](./embed.js) | Public one-script entry point, API base selection, optional history navigation, `window.NorthstarChat` API |
 | [`northstar-chat-widget.js`](./northstar-chat-widget.js) | Custom element, Shadow DOM template, host layout integration, public methods |
-| [`webchat.js`](./webchat.js) | Controller state, conversation history, send/restore, typed actions, inline form/workflow events |
+| [`webchat.js`](./webchat.js) | Conversation lifecycle, transcript/history state, sending, typed actions, and inline flow sequencing |
 | [`webchat.css`](./webchat.css) | Component layout, responsive panel, cards, forms, status, and accessibility presentation |
-| [`core/`](./core/README.md) | Transport, context, DOM safety, saved form profile, formatting |
+| [`core/`](./core/README.md) | Transport, context, DOM/form state, deterministic form submission, saved profile, formatting |
 | [`views/`](./views/README.md) | Closed message/card/form renderer modules |
 
 ## Host integration

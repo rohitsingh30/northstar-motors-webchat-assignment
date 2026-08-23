@@ -19,7 +19,17 @@ class ExpectedToolProvider:
     async def generate_turn(self, messages):
         if any(message.get("role") == "tool" for message in messages):
             return ProviderReply("Here are the current details.")
-        return ProviderReply("", [ToolCall("semantic-tool", self.tool_name, {})])
+        arguments = {
+            "compare_vehicle_models": {"queries": ["BMW 1 Series", "BMW 3 Series"]},
+            "estimate_part_exchange": {
+                "registration": "AB19 XYZ",
+                "mileage": 45_000,
+                "condition": "good",
+            },
+            "prepare_vehicle_interest": {"vehicleId": "veh-001"},
+            "list_test_drive_slots": {"vehicleId": "veh-001"},
+        }.get(self.tool_name, {})
+        return ProviderReply("", [ToolCall("semantic-tool", self.tool_name, arguments)])
 
 
 class ContractTools:
@@ -61,6 +71,7 @@ class ContractTools:
             "list_dealerships": "dealership_list",
             "list_offers": "offer_list",
             "list_opening_hours": "opening_hours",
+            "list_holiday_opening_hours": "opening_hours",
             "list_test_drive_slots": "test_drive_slot_picker",
             "list_workshop_locations": "workshop_location_list",
             "list_workshop_slots": "slot_list",
@@ -84,13 +95,26 @@ class ContractTools:
     [
         ("Show me cars under £35,000", "search_vehicles", "vehicle_list"),
         ("Find hybrid SUVs below £45,000", "search_vehicles", "vehicle_list"),
-        ("Compare the BMW 1 Series and BMW 3 Series", "compare_vehicle_models", "vehicle_comparison"),
+        (
+            "Compare the BMW 1 Series and BMW 3 Series",
+            "compare_vehicle_models",
+            "vehicle_comparison",
+        ),
         ("What new-car offers are currently published?", "list_offers", "offer_list"),
         ("Where are your workshop locations?", "list_workshop_locations", "workshop_location_list"),
-        ("I need to change an existing workshop booking", "request_workshop_booking_lookup_form", "private_booking_lookup"),
+        (
+            "I need to change an existing workshop booking",
+            "request_workshop_booking_lookup_form",
+            "private_booking_lookup",
+        ),
         ("Show me dealership contact details", "list_dealerships", "dealership_list"),
-        ("What departments does the dealership have?", "list_dealership_departments", "dealership_list"),
+        (
+            "What departments does the dealership have?",
+            "list_dealership_departments",
+            "dealership_list",
+        ),
         ("What are your opening hours this Saturday?", "list_opening_hours", "opening_hours"),
+        ("Are you open on the bank holiday?", "list_holiday_opening_hours", "opening_hours"),
         ("Leave a message for the service department", "prepare_dealership_message", "draft"),
         ("Please arrange a callback about this car", "prepare_callback", "draft"),
         (
@@ -106,7 +130,11 @@ class ContractTools:
         ("I want to make a part-exchange enquiry", "prepare_part_exchange", "draft"),
         ("I have a general enquiry about buying this car", "prepare_sales_enquiry", "draft"),
         ("This vehicle is reserved; register my interest", "prepare_vehicle_interest", "draft"),
-        ("I would like to test drive this vehicle", "list_test_drive_slots", "test_drive_slot_picker"),
+        (
+            "I would like to test drive this vehicle",
+            "list_test_drive_slots",
+            "test_drive_slot_picker",
+        ),
     ],
 )
 def test_semantic_tool_results_cannot_degrade_to_unstructured_prose(
@@ -271,9 +299,7 @@ def test_default_offline_provider_returns_structured_views_for_sample_questions(
         webchat_database_path=tmp_path / "webchat.sqlite3",
     )
     with TestClient(create_app(settings)) as browser:
-        created = browser.post(
-            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
-        ).json()
+        created = browser.post("/api/chat/v1/conversations", json={"pageContext": CONTEXT}).json()
         tools = ContractTools()
         browser.app.state.orchestrator.tools = tools
         response = browser.post(

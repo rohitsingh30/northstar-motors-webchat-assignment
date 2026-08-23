@@ -14,6 +14,7 @@ class Message:
     view_type: str | None
     view_payload_json: str | None
     created_at: str
+    interaction_json: str | None = None
 
 
 @dataclass(frozen=True)

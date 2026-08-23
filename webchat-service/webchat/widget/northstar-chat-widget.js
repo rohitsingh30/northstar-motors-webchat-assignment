@@ -55,9 +55,8 @@ template.innerHTML = `
         <div class="webchat-progress-copy">
           <span class="webchat-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
           <p id="webchat-status" class="webchat-status" role="status" aria-live="polite"></p>
-          <span id="webchat-progress-value" class="webchat-progress-value" aria-hidden="true"></span>
         </div>
-        <progress id="webchat-progress-bar" max="100" value="0" aria-label="Request progress"></progress>
+        <progress id="webchat-progress-bar" max="100" aria-label="Request in progress"></progress>
       </div>
       <form id="webchat-form" class="webchat-form">
         <label for="webchat-input">Your message</label>

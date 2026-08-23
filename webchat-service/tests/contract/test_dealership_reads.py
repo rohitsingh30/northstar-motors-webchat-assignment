@@ -23,6 +23,19 @@ async def test_public_read_uses_filters_without_api_key_and_normalizes_assets() 
 
 
 @pytest.mark.asyncio
+async def test_vehicle_search_preserves_repeated_negative_filter_values() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get_list("excludedMakes") == ["Land Rover", "BMW"]
+        return httpx.Response(200, json={"items": [], "pagination": {"totalItems": 0}})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://platform"
+    ) as http:
+        client = DealershipClient("http://platform", "secret", http)
+        await client.search_vehicles({"excludedMakes": ["Land Rover", "BMW"]})
+
+
+@pytest.mark.asyncio
 async def test_structured_platform_error_is_normalized() -> None:
     transport = httpx.MockTransport(
         lambda request: httpx.Response(

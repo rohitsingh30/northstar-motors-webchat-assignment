@@ -1,20 +1,28 @@
-// Persist reusable ordinary-form fields, never private booking-lookup proof.
+// Persist customer identity/contact details and the vehicle registration used in ordinary forms.
+// Workflow content, choices, and all private booking-lookup proof remain request-specific.
 const PROFILE_KEY = "northstarFormProfileV1";
-const INTERNAL_FIELDS = new Set([
-  "draftId",
-  "mode",
-  "offerId",
-  "serviceTypeId",
-  "slotId",
-  "vehicleId",
-  "verifiedGrantId",
+const REUSABLE_PROFILE_FIELDS = new Set([
+  "firstName",
+  "lastName",
+  "email",
+  "phone",
+  "registration",
 ]);
 
 export function createFormProfile(transcript, storage = localStorage) {
   function savedProfile() {
     try {
       const parsed = JSON.parse(storage.getItem(PROFILE_KEY) || "{}");
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      const profile = Object.fromEntries(
+        Object.entries(parsed).filter(
+          ([name, value]) => REUSABLE_PROFILE_FIELDS.has(name) && typeof value === "string",
+        ),
+      );
+      if (Object.keys(profile).length !== Object.keys(parsed).length) {
+        storage.setItem(PROFILE_KEY, JSON.stringify(profile));
+      }
+      return profile;
     } catch {
       return {};
     }
@@ -25,7 +33,7 @@ export function createFormProfile(transcript, storage = localStorage) {
     const type = String(field?.type || "").toLowerCase();
     return Boolean(
       name
-      && !INTERNAL_FIELDS.has(name)
+      && REUSABLE_PROFILE_FIELDS.has(name)
       && !field.disabled
       && !field.readOnly
       && !["button", "file", "hidden", "password", "reset", "submit"].includes(type)

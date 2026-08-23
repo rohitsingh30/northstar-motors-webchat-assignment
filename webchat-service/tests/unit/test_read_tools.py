@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from webchat.orchestration.tools.registry import ToolRegistry
+from webchat.orchestration.tools.executor import ApplicationToolExecutor
 
 
 class FakeDealership:
@@ -56,21 +56,51 @@ class FakeDealership:
 
     async def get_dealership(self, dealership_id):
         return next(
-            item
-            for item in (await self.list_dealerships())["items"]
-            if item["id"] == dealership_id
+            item for item in (await self.list_dealerships())["items"] if item["id"] == dealership_id
         )
 
     async def get_opening_hours(self, dealership_id):
         return {
             "weekly": [
-                {"department": "sales", "day": "Saturday", "opensAt": "09:00", "closesAt": "17:00", "closed": False},
-                {"department": "service", "day": "Saturday", "opensAt": "09:00", "closesAt": "13:00", "closed": False},
-                {"department": "parts", "day": "Saturday", "opensAt": "09:00", "closesAt": "13:00", "closed": False},
+                {
+                    "department": "sales",
+                    "day": "Saturday",
+                    "opensAt": "09:00",
+                    "closesAt": "17:00",
+                    "closed": False,
+                },
+                {
+                    "department": "service",
+                    "day": "Saturday",
+                    "opensAt": "09:00",
+                    "closesAt": "13:00",
+                    "closed": False,
+                },
+                {
+                    "department": "parts",
+                    "day": "Saturday",
+                    "opensAt": "09:00",
+                    "closesAt": "13:00",
+                    "closed": False,
+                },
             ],
             "holidayExceptions": [
-                {"department": "sales", "date": "2026-08-31", "label": "Bank holiday", "opensAt": "10:00", "closesAt": "16:00", "closed": False},
-                {"department": "service", "date": "2026-08-31", "label": "Bank holiday", "opensAt": None, "closesAt": None, "closed": True},
+                {
+                    "department": "sales",
+                    "date": "2026-08-31",
+                    "label": "Bank holiday",
+                    "opensAt": "10:00",
+                    "closesAt": "16:00",
+                    "closed": False,
+                },
+                {
+                    "department": "service",
+                    "date": "2026-08-31",
+                    "label": "Bank holiday",
+                    "opensAt": None,
+                    "closesAt": None,
+                    "closed": True,
+                },
             ],
         }
 
@@ -109,14 +139,36 @@ class FakeDealership:
     async def list_service_types(self):
         return {
             "items": [
-                {"id": "mot", "name": "MOT", "description": "Annual MOT inspection.", "durationMinutes": 60, "priceFromPence": 5499},
-                {"id": "full-service", "name": "Full service", "description": "Comprehensive annual vehicle service.", "durationMinutes": 180, "priceFromPence": 32900},
-                {"id": "tyre-fitting", "name": "Tyre fitting", "description": "Tyre replacement and balancing.", "durationMinutes": 90, "priceFromPence": None},
+                {
+                    "id": "mot",
+                    "name": "MOT",
+                    "description": "Annual MOT inspection.",
+                    "durationMinutes": 60,
+                    "priceFromPence": 5499,
+                },
+                {
+                    "id": "full-service",
+                    "name": "Full service",
+                    "description": "Comprehensive annual vehicle service.",
+                    "durationMinutes": 180,
+                    "priceFromPence": 32900,
+                },
+                {
+                    "id": "tyre-fitting",
+                    "name": "Tyre fitting",
+                    "description": "Tyre replacement and balancing.",
+                    "durationMinutes": 90,
+                    "priceFromPence": None,
+                },
             ]
         }
 
     async def list_workshop_locations(self):
-        return {"items": [{"id": "dealer-stockport", "name": "Northstar Stockport", "town": "Stockport"}]}
+        return {
+            "items": [
+                {"id": "dealer-stockport", "name": "Northstar Stockport", "town": "Stockport"}
+            ]
+        }
 
     async def list_workshop_slots(self, filters):
         self.last_workshop_filters = filters
@@ -143,7 +195,9 @@ class FakeDealership:
 
 @pytest.mark.asyncio
 async def test_vehicle_list_uses_closed_safe_view() -> None:
-    result = await ToolRegistry(FakeDealership()).execute("search_vehicles", {"make": "Volvo"})
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
+        "search_vehicles", {"make": "Volvo"}
+    )
 
     assert result.view_type == "vehicle_list"
     assert result.view_payload["items"][0]["price"] == "Price on request"
@@ -152,7 +206,7 @@ async def test_vehicle_list_uses_closed_safe_view() -> None:
 
 @pytest.mark.asyncio
 async def test_vehicle_details_use_a_distinct_closed_view() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "get_vehicle", {"id": "veh-019"}
     )
 
@@ -176,7 +230,7 @@ async def test_page_vehicle_selection_ranks_only_supplied_live_vehicle_ids() -> 
                 "availability": "available",
             }
 
-    result = await ToolRegistry(RankedDealership()).execute(
+    result = await ApplicationToolExecutor(RankedDealership()).execute(
         "select_page_vehicles",
         {
             "vehicleIds": ["veh-020", "veh-032", "veh-044"],
@@ -189,12 +243,22 @@ async def test_page_vehicle_selection_ranks_only_supplied_live_vehicle_ids() -> 
     assert [item["id"] for item in result.view_payload["items"]] == ["veh-044"]
     assert result.view_payload["scope"] == "currentPage"
     assert result.view_payload["total"] == 3
+    assert result.view_payload["suggestions"] == [
+        {
+            "label": "Search full inventory",
+            "text": "search the full vehicle inventory with these filters",
+            "action": {"type": "search_vehicle_inventory"},
+        },
+        {"label": "Find another car", "text": "help me find another car"},
+        {"label": "Current offers", "text": "show me current offers"},
+        {"label": "Cheapest cars", "text": "show me the cheapest available cars"},
+    ]
 
 
 @pytest.mark.asyncio
 async def test_vehicle_search_resolves_town_to_live_dealership_id() -> None:
     dealership = FakeDealership()
-    await ToolRegistry(dealership).execute(
+    await ApplicationToolExecutor(dealership).execute(
         "search_vehicles", {"dealershipTown": "stockport"}
     )
 
@@ -204,7 +268,7 @@ async def test_vehicle_search_resolves_town_to_live_dealership_id() -> None:
 
 @pytest.mark.asyncio
 async def test_vehicle_search_for_unknown_town_does_not_return_empty_cards() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "search_vehicles", {"dealershipTown": "Newcastle"}
     )
 
@@ -214,7 +278,7 @@ async def test_vehicle_search_for_unknown_town_does_not_return_empty_cards() -> 
 
 @pytest.mark.asyncio
 async def test_vehicle_search_preserves_requested_page_for_show_more() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "search_vehicles", {"page": 2, "make": "Volvo"}
     )
 
@@ -224,13 +288,71 @@ async def test_vehicle_search_preserves_requested_page_for_show_more() -> None:
         "filters": {"make": "Volvo", "sort": "newest"},
         "page": 2,
     }
+    assert result.view_payload["filterSummary"] == "Make: Volvo"
+
+
+@pytest.mark.asyncio
+async def test_empty_vehicle_results_explain_retained_filters_and_offer_real_reset() -> None:
+    class EmptyDealership(FakeDealership):
+        async def search_vehicles(self, filters):
+            self.last_search_filters = filters
+            return {
+                "items": [],
+                "pagination": {"page": 1, "pageSize": 3, "totalItems": 0},
+            }
+
+    result = await ApplicationToolExecutor(EmptyDealership()).execute(
+        "refine_vehicle_search",
+        {"fuelType": "Hybrid", "make": "BMW"},
+    )
+
+    assert result.text == (
+        "I couldn't find any available vehicles matching your current filters: "
+        "Make: BMW; Fuel: Hybrid. Try changing or clearing a filter."
+    )
+    assert [suggestion["label"] for suggestion in result.view_payload["suggestions"]] == [
+        "Change fuel",
+        "Any fuel",
+        "Show all cars",
+        "Cheapest cars",
+    ]
+    assert result.view_payload["suggestions"][2]["action"] == {
+        "type": "reset_vehicle_search"
+    }
+
+
+@pytest.mark.asyncio
+async def test_vehicle_search_forwards_generic_negative_preferences() -> None:
+    dealership = FakeDealership()
+
+    result = await ApplicationToolExecutor(dealership).execute(
+        "refine_vehicle_search",
+        {
+            "bodyStyle": "SUV",
+            "fuelType": "Hybrid",
+            "maxPricePence": 4_500_000,
+            "excludedMakes": ["Land Rover"],
+        },
+    )
+
+    assert dealership.last_search_filters == {
+        "page": 1,
+        "bodyStyle": "SUV",
+        "fuelType": "Hybrid",
+        "excludedMakes": ["Land Rover"],
+        "maxPricePence": 4_500_000,
+        "sort": "newest",
+        "pageSize": 3,
+        "availability": "available",
+    }
+    assert result.view_payload["search"]["filters"]["excludedMakes"] == ["Land Rover"]
 
 
 @pytest.mark.asyncio
 async def test_explicit_reserved_or_sold_search_is_not_forced_back_to_available() -> None:
     dealership = FakeDealership()
 
-    await ToolRegistry(dealership).execute(
+    await ApplicationToolExecutor(dealership).execute(
         "search_vehicles", {"availability": "reserved"}
     )
 
@@ -239,7 +361,7 @@ async def test_explicit_reserved_or_sold_search_is_not_forced_back_to_available(
 
 @pytest.mark.asyncio
 async def test_vehicle_search_suggests_next_page_only_when_more_results_exist() -> None:
-    registry = ToolRegistry(FakeDealership())
+    registry = ApplicationToolExecutor(FakeDealership())
 
     first_page = await registry.execute("search_vehicles", {"page": 1})
     last_page = await registry.execute("search_vehicles", {"page": 6})
@@ -254,7 +376,7 @@ async def test_vehicle_search_suggests_next_page_only_when_more_results_exist() 
 
 @pytest.mark.asyncio
 async def test_department_list_is_derived_from_live_opening_hours() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_dealership_departments", {}
     )
 
@@ -263,8 +385,23 @@ async def test_department_list_is_derived_from_live_opening_hours() -> None:
 
 
 @pytest.mark.asyncio
+async def test_departments_can_be_scoped_to_one_live_dealership() -> None:
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
+        "find_dealership_departments", {"town": "Stockport"}
+    )
+
+    assert result.view_type == "dealership_list"
+    assert [item["town"] for item in result.view_payload["items"]] == ["Stockport"]
+    assert result.view_payload["items"][0]["departments"] == [
+        "parts",
+        "sales",
+        "service",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_unknown_dealership_town_returns_no_cards() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_dealerships", {"town": "Newcastle"}
     )
 
@@ -275,19 +412,17 @@ async def test_unknown_dealership_town_returns_no_cards() -> None:
 
 @pytest.mark.asyncio
 async def test_misspelled_dealership_town_returns_the_matching_card() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_dealerships", {"town": "Manchaester"}
     )
 
     assert result.view_type == "dealership_list"
-    assert result.view_payload["items"] == [
-        {"id": "dealer-manchester", "town": "Manchester"}
-    ]
+    assert result.view_payload["items"] == [{"id": "dealer-manchester", "town": "Manchester"}]
 
 
 @pytest.mark.asyncio
 async def test_opening_hours_are_grouped_into_customer_facing_location_cards() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_opening_hours", {"day": "Saturday"}
     )
 
@@ -300,7 +435,7 @@ async def test_opening_hours_are_grouped_into_customer_facing_location_cards() -
 
 @pytest.mark.asyncio
 async def test_opening_hours_can_be_filtered_to_a_live_dealership_town() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_opening_hours", {"town": "Stockport"}
     )
 
@@ -308,8 +443,21 @@ async def test_opening_hours_can_be_filtered_to_a_live_dealership_town() -> None
 
 
 @pytest.mark.asyncio
+async def test_holiday_opening_hours_do_not_mix_in_regular_weekday_hours() -> None:
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
+        "list_holiday_opening_hours", {}
+    )
+
+    assert result.text == "Published holiday opening hours are shown below."
+    assert result.view_payload["holidayOnly"] is True
+    assert result.view_payload["day"] == "Holiday"
+    assert all(item["departments"] == [] for item in result.view_payload["items"])
+    assert all(item["holidayExceptions"] for item in result.view_payload["items"])
+
+
+@pytest.mark.asyncio
 async def test_opening_hours_can_be_filtered_to_one_department() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_opening_hours", {"town": "Stockport", "department": "parts"}
     )
 
@@ -320,20 +468,23 @@ async def test_opening_hours_can_be_filtered_to_one_department() -> None:
 
 @pytest.mark.asyncio
 async def test_opening_hours_for_unknown_town_do_not_show_unrelated_cards() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_opening_hours", {"town": "Newcastle"}
     )
 
     assert result.view_type == "suggestion_list"
     assert result.facts == {"requestedTown": "Newcastle", "items": []}
     assert result.view_payload["suggestions"] == [
-        {"label": "Show all locations", "text": "show me all dealership locations"}
+        {"label": "Show all locations", "text": "show me all dealership locations"},
+        {"label": "Opening hours", "text": "show me the opening hours"},
+        {"label": "Departments", "text": "what departments do the dealerships have?"},
+        {"label": "Request a callback", "text": "please have a dealership call me"},
     ]
 
 
 @pytest.mark.asyncio
 async def test_single_dealership_hours_use_the_same_card_shape_as_list_hours() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "get_opening_hours", {"id": "dealer-stockport"}
     )
 
@@ -345,18 +496,20 @@ async def test_single_dealership_hours_use_the_same_card_shape_as_list_hours() -
 
 @pytest.mark.asyncio
 async def test_workshop_locations_have_distinct_follow_up_actions() -> None:
-    result = await ToolRegistry(FakeDealership()).execute("list_workshop_locations", {})
+    result = await ApplicationToolExecutor(FakeDealership()).execute("list_workshop_locations", {})
 
     assert result.view_type == "workshop_location_list"
     assert [item["label"] for item in result.view_payload["suggestions"]] == [
         "Book a service",
         "Find my booking",
+        "Service types",
+        "Request a callback",
     ]
 
 
 @pytest.mark.asyncio
 async def test_service_types_include_a_chip_for_each_live_choice() -> None:
-    result = await ToolRegistry(FakeDealership()).execute("list_service_types", {})
+    result = await ApplicationToolExecutor(FakeDealership()).execute("list_service_types", {})
 
     assert [item["label"] for item in result.view_payload["suggestions"]] == [
         "MOT",
@@ -367,7 +520,7 @@ async def test_service_types_include_a_chip_for_each_live_choice() -> None:
 
 @pytest.mark.asyncio
 async def test_unsupported_named_service_returns_a_clear_outcome_not_the_catalogue() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "get_service_information", {"q": "Do you do car cleaning?"}
     )
 
@@ -383,12 +536,12 @@ async def test_unsupported_named_service_returns_a_clear_outcome_not_the_catalog
 @pytest.mark.asyncio
 async def test_write_like_tool_is_rejected() -> None:
     with pytest.raises(ValueError, match="disallowed"):
-        await ToolRegistry(FakeDealership()).execute("create_test_drive", {})
+        await ApplicationToolExecutor(FakeDealership()).execute("create_test_drive", {})
 
 
 @pytest.mark.asyncio
 async def test_vehicle_comparison_uses_current_vehicle_records() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "compare_vehicles", {"vehicleIds": ["veh-019", "veh-020"]}
     )
 
@@ -398,13 +551,44 @@ async def test_vehicle_comparison_uses_current_vehicle_records() -> None:
 
 @pytest.mark.asyncio
 async def test_test_drive_options_include_vehicle_for_progressive_card() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "list_test_drive_slots", {"vehicleId": "veh-019"}
     )
 
     assert result.view_type == "test_drive_slot_picker"
     assert result.view_payload["vehicle"]["id"] == "veh-019"
     assert result.view_payload["items"][0]["id"] == "td-slot-0001"
+
+
+@pytest.mark.asyncio
+async def test_test_drive_without_online_slots_has_clear_recovery_actions() -> None:
+    class NoOnlineSlots(FakeDealership):
+        async def get_vehicle_availability(self, vehicle_id):
+            return {
+                "vehicleId": vehicle_id,
+                "availability": "available",
+                "canEnquire": True,
+                "canBookTestDrive": False,
+                "canRegisterInterest": False,
+            }
+
+        async def list_test_drive_slots(self, filters):
+            assert filters == {"vehicleId": "veh-019"}
+            return {"items": []}
+
+    result = await ApplicationToolExecutor(NoOnlineSlots()).execute(
+        "list_test_drive_slots", {"vehicleId": "veh-019"}
+    )
+
+    assert result.view_payload["emptyMessage"] == (
+        "No online test-drive times are currently available for this vehicle."
+    )
+    assert [item["label"] for item in result.view_payload["suggestions"]] == [
+        "Send a sales enquiry",
+        "Find another car",
+        "Part-exchange estimate",
+        "Current offers",
+    ]
 
 
 @pytest.mark.asyncio
@@ -427,7 +611,7 @@ async def test_reserved_vehicle_returns_interest_actions_instead_of_test_drive_t
         async def list_test_drive_slots(self, filters):
             raise AssertionError("Reserved vehicles must not request test-drive slots")
 
-    result = await ToolRegistry(ReservedVehicle()).execute(
+    result = await ApplicationToolExecutor(ReservedVehicle()).execute(
         "list_test_drive_slots", {"vehicleId": "veh-007"}
     )
 
@@ -442,7 +626,7 @@ async def test_reserved_vehicle_returns_interest_actions_instead_of_test_drive_t
 @pytest.mark.asyncio
 async def test_named_workshop_filters_resolve_against_live_records() -> None:
     dealership = FakeDealership()
-    result = await ToolRegistry(dealership).execute(
+    result = await ApplicationToolExecutor(dealership).execute(
         "list_workshop_slots",
         {"dealershipTown": "Stockport", "serviceTypeName": "MOT"},
     )
@@ -458,7 +642,7 @@ async def test_named_workshop_filters_resolve_against_live_records() -> None:
 
 @pytest.mark.asyncio
 async def test_service_price_question_returns_plain_live_information() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "get_service_information",
         {"q": "What would I pay to have my tyres fitted?"},
     )
@@ -474,10 +658,43 @@ async def test_service_price_question_returns_plain_live_information() -> None:
 @pytest.mark.asyncio
 async def test_workshop_slots_can_never_be_requested_without_a_service() -> None:
     dealership = FakeDealership()
-    result = await ToolRegistry(dealership).execute("list_workshop_slots", {})
+    result = await ApplicationToolExecutor(dealership).execute("list_workshop_slots", {})
 
     assert result.view_type == "service_list"
     assert dealership.last_workshop_filters is None
+
+
+@pytest.mark.asyncio
+async def test_dealership_service_selection_only_lists_services_with_live_slots() -> None:
+    class LocationServices(FakeDealership):
+        async def list_workshop_slots(self, filters):
+            self.last_workshop_filters = filters
+            return {
+                "items": [
+                    {"id": "slot-1", "serviceTypeId": "mot"},
+                    {"id": "slot-2", "serviceTypeId": "tyre-fitting"},
+                ]
+            }
+
+    dealership = LocationServices()
+    result = await ApplicationToolExecutor(dealership).execute(
+        "list_workshop_slots", {"dealershipId": "dealer-stockport"}
+    )
+
+    assert result.view_type == "service_list"
+    assert [item["id"] for item in result.view_payload["items"]] == [
+        "mot",
+        "tyre-fitting",
+    ]
+    assert result.view_payload["dealershipId"] == "dealer-stockport"
+    assert all(
+        suggestion["action"]["dealershipId"] == "dealer-stockport"
+        for suggestion in result.view_payload["suggestions"]
+    )
+    assert dealership.last_workshop_filters == {
+        "dealershipId": "dealer-stockport",
+        "dateFrom": datetime.now(UTC).date().isoformat(),
+    }
 
 
 @pytest.mark.asyncio
@@ -487,9 +704,7 @@ async def test_empty_workshop_availability_suggests_live_alternative_locations()
             self.last_workshop_filters = filters
             if filters.get("dealershipId") == "dealer-stockport":
                 return {"items": []}
-            future = (datetime.now(UTC) + timedelta(days=1)).isoformat().replace(
-                "+00:00", "Z"
-            )
+            future = (datetime.now(UTC) + timedelta(days=1)).isoformat().replace("+00:00", "Z")
             return {
                 "items": [
                     {
@@ -500,7 +715,7 @@ async def test_empty_workshop_availability_suggests_live_alternative_locations()
                 ]
             }
 
-    result = await ToolRegistry(NoLocalWorkshopSlots()).execute(
+    result = await ApplicationToolExecutor(NoLocalWorkshopSlots()).execute(
         "list_workshop_slots",
         {"dealershipTown": "Stockport", "serviceTypeName": "MOT"},
     )
@@ -523,7 +738,7 @@ async def test_empty_workshop_availability_suggests_live_alternative_locations()
 
 @pytest.mark.asyncio
 async def test_named_vehicle_comparison_resolves_each_query_from_live_stock() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "compare_vehicle_models", {"queries": ["BMW 1 Series", "BMW 3 Series"]}
     )
 
@@ -533,7 +748,7 @@ async def test_named_vehicle_comparison_resolves_each_query_from_live_stock() ->
 
 @pytest.mark.asyncio
 async def test_duplicate_vehicle_ids_do_not_render_a_fake_comparison() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "compare_vehicles", {"vehicleIds": ["veh-019", "veh-019"]}
     )
 
@@ -543,7 +758,7 @@ async def test_duplicate_vehicle_ids_do_not_render_a_fake_comparison() -> None:
 
 @pytest.mark.asyncio
 async def test_vehicle_facets_are_derived_from_platform_inventory() -> None:
-    result = await ToolRegistry(FakeDealership()).execute("get_vehicle_facets", {})
+    result = await ApplicationToolExecutor(FakeDealership()).execute("get_vehicle_facets", {})
 
     assert result.facts == {
         "makes": ["Dynamic Make"],
@@ -558,7 +773,7 @@ async def test_vehicle_facets_are_derived_from_platform_inventory() -> None:
 
 @pytest.mark.asyncio
 async def test_part_exchange_estimate_is_read_only_and_structured() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "estimate_part_exchange",
         {"registration": "AB19 XYZ", "mileage": 45_000, "condition": "good"},
     )
@@ -570,7 +785,7 @@ async def test_part_exchange_estimate_is_read_only_and_structured() -> None:
 
 @pytest.mark.asyncio
 async def test_part_exchange_estimate_form_only_collects_valuation_inputs() -> None:
-    result = await ToolRegistry(FakeDealership()).execute(
+    result = await ApplicationToolExecutor(FakeDealership()).execute(
         "request_part_exchange_estimate_form",
         {"registration": "AB19 XYZ"},
     )

@@ -27,7 +27,9 @@ def message_view(message) -> dict:
     return view
 
 
-def receipt_text(kind: str) -> str:
+def receipt_text(kind: str, request_kind: str | None = None) -> str:
+    if kind == "request_cancelled" and request_kind == "sales_enquiry":
+        return "Your sales enquiry has been cancelled."
     return {
         "sales_enquiry": "Your sales enquiry has been submitted.",
         "test_drive": "Your test drive is confirmed.",
@@ -56,9 +58,7 @@ class ConversationRestorer:
         statuses = self.workflows.statuses(conversation_id, draft_ids)
         active_messages = self._active_messages(messages, statuses)
         restored = [message_view(message) for message in _restorable_messages(active_messages)]
-        self._insert_missing_receipts(
-            restored, self.workflows.succeeded_receipts(conversation_id)
-        )
+        self._insert_missing_receipts(restored, self.workflows.succeeded_receipts(conversation_id))
         return restored
 
     @staticmethod
@@ -103,21 +103,21 @@ class ConversationRestorer:
             synthetic = {
                 "id": f"workflow-{completed['draftId']}",
                 "role": "assistant",
-                "text": receipt_text(str(receipt.get("kind") or "")),
+                "text": receipt_text(
+                    str(receipt.get("kind") or ""),
+                    str(receipt.get("requestKind") or ""),
+                ),
                 "createdAt": completed["createdAt"],
                 "viewType": "receipt",
                 "view": receipt,
             }
             insert_at = len(restored)
             for index, item in enumerate(restored):
-                if (
-                    item.get("viewType") in {"draft", "confirmation"}
-                    and item.get("view", {}).get("kind") == receipt.get("kind")
-                ):
+                if item.get("viewType") in {"draft", "confirmation"} and item.get("view", {}).get(
+                    "kind"
+                ) == receipt.get("kind"):
                     insert_at = (
-                        index - 1
-                        if index and restored[index - 1].get("role") == "user"
-                        else index
+                        index - 1 if index and restored[index - 1].get("role") == "user" else index
                     )
                     break
             restored.insert(insert_at, synthetic)

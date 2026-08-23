@@ -76,9 +76,13 @@ class DealershipClient:
                 method, path, params=params, json=body, headers=headers
             )
         except httpx.TimeoutException as error:
-            raise DealershipError(503, "PLATFORM_TIMEOUT", "The dealership platform timed out.", True) from error
+            raise DealershipError(
+                503, "PLATFORM_TIMEOUT", "The dealership platform timed out.", True
+            ) from error
         except httpx.HTTPError as error:
-            raise DealershipError(503, "PLATFORM_UNAVAILABLE", "The dealership platform is unavailable.", True) from error
+            raise DealershipError(
+                503, "PLATFORM_UNAVAILABLE", "The dealership platform is unavailable.", True
+            ) from error
         if response.status_code >= 400:
             try:
                 problem = response.json().get("error", {})
@@ -87,7 +91,11 @@ class DealershipClient:
             raise DealershipError(
                 response.status_code,
                 str(problem.get("code", "PLATFORM_ERROR")),
-                str(problem.get("message", "The dealership platform could not complete the request.")),
+                str(
+                    problem.get(
+                        "message", "The dealership platform could not complete the request."
+                    )
+                ),
                 bool(problem.get("retryable", response.status_code >= 500)),
                 {
                     str(field): str(message)
@@ -97,7 +105,9 @@ class DealershipClient:
                 else None,
             )
         if int(response.headers.get("content-length", "0")) > 2_000_000:
-            raise DealershipError(502, "PLATFORM_RESPONSE_TOO_LARGE", "The platform response was too large.")
+            raise DealershipError(
+                502, "PLATFORM_RESPONSE_TOO_LARGE", "The platform response was too large."
+            )
         return self._normalize_assets(response.json())
 
     async def search_vehicles(self, filters: dict[str, Any]) -> dict[str, Any]:
@@ -194,9 +204,7 @@ class DealershipClient:
         )
 
     async def get_workshop_booking(self, record_id: str) -> dict[str, Any]:
-        return await self._request(
-            "GET", f"/api/workshop-bookings/{record_id}", protected=True
-        )
+        return await self._request("GET", f"/api/workshop-bookings/{record_id}", protected=True)
 
     async def update_workshop_booking(self, record_id: str, body: dict[str, Any]) -> dict[str, Any]:
         return await self._request(

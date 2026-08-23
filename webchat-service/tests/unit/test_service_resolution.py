@@ -45,3 +45,20 @@ def test_unknown_service_is_distinct_from_an_ambiguous_match() -> None:
 
     assert resolution.status == "unsupported"
     assert resolution.service is None
+
+
+def test_equal_live_service_matches_return_candidates_instead_of_guessing() -> None:
+    resolution = resolve_live_service(
+        [
+            {"id": "tyre-fitting", "name": "Tyre fitting"},
+            {"id": "tyre-service", "name": "Tyre service"},
+        ],
+        "tyre",
+    )
+
+    assert resolution.status == "ambiguous"
+    assert resolution.service is None
+    assert {item["id"] for item in resolution.candidates} == {
+        "tyre-fitting",
+        "tyre-service",
+    }

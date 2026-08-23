@@ -19,8 +19,8 @@ def chip(
 
 def vehicle_search_suggestions(
     *, query: dict[str, Any], item_count: int, page: int, page_size: int, total: int
-) -> list[dict[str, str]]:
-    suggestions: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    suggestions: list[dict[str, Any]] = []
     if page * page_size < total:
         suggestions.append(
             chip(
@@ -37,23 +37,163 @@ def vehicle_search_suggestions(
                 {"type": "compare_displayed_vehicles"},
             )
         )
+    suggestions.extend(vehicle_filter_controls(query) or vehicle_discovery_controls())
     if query.get("sort") != "priceAsc":
         suggestions.append(chip("Cheapest first", "show me the cheapest matching vehicles first"))
+    if len(suggestions) == 3:
+        suggestions.append(chip("Find another car", "help me find another car"))
     return suggestions[:4]
 
 
-def no_vehicle_results_suggestions() -> list[dict[str, str]]:
+def current_page_vehicle_suggestions(item_count: int) -> list[dict[str, Any]]:
+    """Offer typed next steps when a search was explicitly scoped to page vehicles."""
+    suggestions: list[dict[str, Any]] = []
+    if item_count >= 2:
+        suggestions.append(
+            chip(
+                "Compare these vehicles",
+                "compare the vehicles currently shown",
+                {"type": "compare_displayed_vehicles"},
+            )
+        )
+    suggestions.append(
+        chip(
+            "Search full inventory",
+            "search the full vehicle inventory with these filters",
+            {"type": "search_vehicle_inventory"},
+        )
+    )
+    suggestions.extend(
+        [
+            chip("Find another car", "help me find another car"),
+            chip("Current offers", "show me current offers"),
+        ]
+    )
+    if len(suggestions) == 3:
+        suggestions.append(chip("Cheapest cars", "show me the cheapest available cars"))
+    return suggestions[:4]
+
+
+def no_vehicle_results_suggestions(query: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    suggestions = vehicle_filter_controls(query or {}) or vehicle_discovery_controls()
+    suggestions.extend(
+        [
+            chip(
+                "Show all cars",
+                "show me all available cars",
+                {"type": "reset_vehicle_search"},
+            ),
+            chip("Cheapest cars", "show me the cheapest available cars"),
+        ]
+    )
+    return suggestions[:4]
+
+
+def vehicle_filter_controls(query: dict[str, Any]) -> list[dict[str, Any]]:
+    """Offer deterministic change/clear controls for the most useful active filter."""
+    controls = {
+        "fuelType": "fuel",
+        "make": "make",
+        "model": "model",
+        "bodyStyle": "body style",
+        "transmission": "gearbox",
+        "maxPricePence": "budget",
+        "maxMileage": "mileage",
+    }
+    for filter_name, label in controls.items():
+        if query.get(filter_name) in (None, ""):
+            continue
+        return [
+            chip(
+                f"Change {label}",
+                f"change my current {label} filter",
+                {
+                    "type": "choose_vehicle_filter",
+                    "vehicleFilter": filter_name,
+                },
+            ),
+            chip(
+                f"Any {label}",
+                f"show matching cars with any {label}",
+                {
+                    "type": "clear_vehicle_filter",
+                    "vehicleFilter": filter_name,
+                },
+            ),
+        ]
+    return []
+
+
+def vehicle_discovery_controls() -> list[dict[str, Any]]:
+    """Offer deterministic starting refinements when no filter is active."""
     return [
-        chip("Show all cars", "show me all available cars"),
-        chip("Cheapest cars", "show me the cheapest available cars"),
-    ][:2]
+        chip(
+            "Choose fuel",
+            "I would like to choose a fuel type",
+            {"type": "choose_vehicle_filter", "vehicleFilter": "fuelType"},
+        ),
+        chip(
+            "Set budget",
+            "I would like to set a budget",
+            {"type": "choose_vehicle_filter", "vehicleFilter": "maxPricePence"},
+        ),
+    ]
+
+
+def vehicle_filter_summary(query: dict[str, Any]) -> str:
+    """Describe active search constraints using stable customer-facing labels."""
+    parts: list[str] = []
+    text_filters = (
+        ("q", "Search"),
+        ("make", "Make"),
+        ("model", "Model"),
+        ("fuelType", "Fuel"),
+        ("transmission", "Gearbox"),
+        ("bodyStyle", "Body style"),
+        ("dealershipTown", "Location"),
+    )
+    for field, label in text_filters:
+        if value := query.get(field):
+            parts.append(f"{label}: {value}")
+    numeric_filters = (
+        ("minPricePence", "Minimum price", lambda value: f"£{int(value) / 100:,.0f}"),
+        ("maxPricePence", "Maximum price", lambda value: f"£{int(value) / 100:,.0f}"),
+        ("maxMileage", "Maximum mileage", lambda value: f"{int(value):,} miles"),
+        ("minYear", "From year", lambda value: str(value)),
+    )
+    for field, label, formatter in numeric_filters:
+        if query.get(field) is not None:
+            parts.append(f"{label}: {formatter(query[field])}")
+    exclusion_filters = (
+        ("excludedMakes", "Excluding makes"),
+        ("excludedModels", "Excluding models"),
+        ("excludedFuelTypes", "Excluding fuels"),
+        ("excludedTransmissions", "Excluding gearboxes"),
+        ("excludedBodyStyles", "Excluding body styles"),
+    )
+    for field, label in exclusion_filters:
+        values = query.get(field)
+        if values:
+            parts.append(f"{label}: {', '.join(str(value) for value in values)}")
+    if query.get("availability") and query["availability"] != "available":
+        parts.append(f"Availability: {str(query['availability']).title()}")
+    sort_labels = {
+        "priceAsc": "lowest price first",
+        "priceDesc": "highest price first",
+        "mileageAsc": "lowest mileage first",
+    }
+    if query.get("sort") in sort_labels:
+        parts.append(f"Order: {sort_labels[query['sort']]}")
+    return "; ".join(parts)
 
 
 def vehicle_comparison_suggestions() -> list[dict[str, str]]:
     return [
         chip("Show cheapest cars", "show me the cheapest available cars"),
         chip("Find another car", "help me find another car"),
-    ][:2]
+        chip("Current offers", "show me current offers"),
+        chip("Part-exchange estimate", "I want an indicative part-exchange estimate"),
+    ][:4]
 
 
 def vehicle_availability_suggestions(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -86,7 +226,15 @@ def vehicle_availability_suggestions(data: dict[str, Any]) -> list[dict[str, Any
                 {"type": "start_sales_enquiry", "vehicleId": vehicle_id},
             )
         )
-    return suggestions[:2]
+    suggestions.extend(
+        [
+            chip("Find another car", "help me find another car"),
+            chip("Part-exchange estimate", "I want an indicative part-exchange estimate"),
+        ]
+    )
+    if len(suggestions) == 3:
+        suggestions.append(chip("Current offers", "show me current offers"))
+    return suggestions[:4]
 
 
 def dealership_suggestions() -> list[dict[str, str]]:
@@ -94,23 +242,57 @@ def dealership_suggestions() -> list[dict[str, str]]:
         chip("Opening hours", "show me the opening hours"),
         chip("Departments", "what departments do the dealerships have?"),
         chip("Request a callback", "please have the dealership call me"),
-    ][:2]
+        chip("Leave a message", "send a message to the dealership"),
+    ][:4]
+
+
+def dealership_contact_suggestions() -> list[dict[str, Any]]:
+    """Offer every safe contact path without selecting one for the customer."""
+    return [
+        chip(
+            "Request a callback",
+            "please have a dealership call me",
+            {"type": "start_callback"},
+        ),
+        chip(
+            "Send a message",
+            "send a message to a dealership",
+            {"type": "start_dealership_message"},
+        ),
+        chip(
+            "Contact details",
+            "show me dealership contact details",
+            {"type": "show_dealerships"},
+        ),
+        chip(
+            "Opening hours",
+            "show me dealership opening hours",
+            {"type": "show_opening_hours"},
+        ),
+    ]
 
 
 def unknown_dealership_suggestions() -> list[dict[str, str]]:
     return [
         chip("Show all locations", "show me all dealership locations"),
-    ]
+        chip("Opening hours", "show me the opening hours"),
+        chip("Departments", "what departments do the dealerships have?"),
+        chip("Request a callback", "please have a dealership call me"),
+    ][:4]
 
 
 def opening_hours_suggestions() -> list[dict[str, str]]:
     return [
         chip("Dealership details", "show me dealership contact details"),
         chip("Request a callback", "please have the dealership call me"),
-    ][:2]
+        chip("Departments", "what departments do the dealerships have?"),
+        chip("Leave a message", "send a message to the dealership"),
+    ][:4]
 
 
-def service_type_suggestions(services: list[dict[str, Any]]) -> list[dict[str, str]]:
+def service_type_suggestions(
+    services: list[dict[str, Any]], dealership_id: str | None = None
+) -> list[dict[str, str]]:
     """Expose each live service as an actionable choice when a service is required."""
     suggestions: list[dict[str, str]] = []
     for service in services[:8]:
@@ -121,7 +303,15 @@ def service_type_suggestions(services: list[dict[str, Any]]) -> list[dict[str, s
                 chip(
                     name,
                     f"Book service: {name}",
-                    {"type": "select_workshop_service", "serviceTypeId": service_id},
+                    (
+                        {
+                            "type": "try_workshop_location",
+                            "serviceTypeId": service_id,
+                            "dealershipId": dealership_id,
+                        }
+                        if dealership_id
+                        else {"type": "select_workshop_service", "serviceTypeId": service_id}
+                    ),
                 )
             )
     return suggestions
@@ -132,7 +322,9 @@ def workshop_location_suggestions() -> list[dict[str, str]]:
     return [
         chip("Book a service", "I want to book a workshop appointment"),
         chip("Find my booking", "find my existing workshop booking"),
-    ][:2]
+        chip("Service types", "what service types do you support?"),
+        chip("Request a callback", "please have the service department call me"),
+    ][:4]
 
 
 def workshop_no_availability_suggestions(
@@ -148,9 +340,7 @@ def workshop_no_availability_suggestions(
             continue
         seen_towns.add(town_key)
         appointment = (
-            f"an appointment for {service_name}"
-            if service_name
-            else "a workshop appointment"
+            f"an appointment for {service_name}" if service_name else "a workshop appointment"
         )
         dealership_id = str(slot.get("dealershipId") or "").strip()
         action = (
@@ -162,9 +352,7 @@ def workshop_no_availability_suggestions(
             if service_type_id and dealership_id
             else None
         )
-        suggestions.append(
-            chip(f"Try {town}", f"Find {appointment} in {town}", action)
-        )
+        suggestions.append(chip(f"Try {town}", f"Find {appointment} in {town}", action))
         if len(suggestions) == 3:
             break
     suggestions.append(
@@ -174,6 +362,12 @@ def workshop_no_availability_suggestions(
             {"type": "show_workshop_services"},
         )
     )
+    if len(suggestions) == 1:
+        suggestions.append(chip("Workshop locations", "show me workshop locations"))
+    elif len(suggestions) == 3:
+        suggestions.append(
+            chip("Request a callback", "please have the service department call me")
+        )
     return suggestions[:4]
 
 
@@ -191,60 +385,11 @@ def offer_suggestions(offer: dict[str, Any] | None = None) -> list[dict[str, Any
         [
             chip("Show available cars", "show me available cars"),
             chip("Part-exchange estimate", "I want an indicative part-exchange estimate"),
+            chip("Finance information", "how does vehicle finance work?"),
+            chip("Dealership locations", "show me all dealership locations"),
         ]
     )
-    return suggestions[:3]
-
-
-def vehicle_clarification_suggestions(
-    user_text: str, assistant_text: str
-) -> list[dict[str, str]]:
-    """Offer answers to the decision being asked, or broad discovery refinements."""
-    user = user_text.lower()
-    assistant = assistant_text.lower()
-    discovery_terms = (
-        "find another car",
-        "what kind of car",
-        "what matters most",
-        "starting point",
-        "narrow",
-        "preferences",
-    )
-    # Broad refinement chips belong only to an explicit car-discovery prompt. A
-    # workflow may legitimately ask for mileage, condition, or another attribute
-    # without becoming a vehicle-search conversation.
-    if not any(term in assistant for term in discovery_terms):
-        return []
-    if vehicle_preference_dimension(assistant):
-        return []
-    suggestions: list[dict[str, str]] = []
-    if "budget" not in user:
-        suggestions.append(chip("Set a budget", "I would like to set a budget"))
-    if not any(term in user for term in ("fuel", "petrol", "diesel", "hybrid", "electric")):
-        suggestions.append(chip("Choose fuel", "I would like to choose a fuel type"))
-    if not any(term in user for term in ("body style", "suv", "hatchback", "saloon", "estate")):
-        suggestions.append(chip("Choose body style", "I would like to choose a body style"))
-    if not any(term in user for term in ("automatic", "manual")):
-        suggestions.append(chip("Choose gearbox", "I would like to choose a gearbox"))
     return suggestions[:4]
-
-
-def vehicle_preference_dimension(assistant_text: str) -> str | None:
-    """Identify a preference dimension without embedding its allowed values."""
-    text = assistant_text.lower()
-    dimensions = (
-        ("transmissions", ("gearbox", "automatic", "manual")),
-        ("fuelTypes", ("fuel", "petrol", "diesel", "hybrid", "electric")),
-        ("bodyStyles", ("body style", "suv", "hatchback", "saloon", "estate")),
-        ("makes", ("make", "manufacturer", "brand")),
-        ("models", ("model",)),
-    )
-    matches = [
-        (min(text.find(term) for term in terms if text.find(term) >= 0), dimension)
-        for dimension, terms in dimensions
-        if any(term in text for term in terms)
-    ]
-    return min(matches, default=(0, None))[1]
 
 
 def vehicle_facet_suggestions(dimension: str, values: list[Any]) -> list[dict[str, str]]:
@@ -328,7 +473,9 @@ def vehicle_facet_prompt(dimension: str, suggestions: list[dict[str, str]]) -> s
         "models": "model",
     }
     label = labels.get(dimension, "option")
-    values = [str(suggestion["label"]).strip() for suggestion in suggestions if suggestion.get("label")]
+    values = [
+        str(suggestion["label"]).strip() for suggestion in suggestions if suggestion.get("label")
+    ]
     if len(values) == 1:
         return f"Northstar currently has {values[0]} {label} options. Choose it below to see matching cars."
     article = "an" if label.startswith(("a", "e", "i", "o", "u")) else "a"

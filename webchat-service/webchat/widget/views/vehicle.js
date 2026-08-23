@@ -87,12 +87,15 @@ export function vehicleCard(item) {
       testDrive.dataset.chatAction = "test-drive";
       testDrive.dataset.vehicleId = item.id;
       testDrive.dataset.vehicleLabel = `${item.make || ""} ${item.model || ""}`.trim();
+      testDrive.setAttribute("aria-expanded", "false");
+      testDrive.setAttribute("aria-controls", `webchat-booking-flow-${item.id}`);
       actions.append(testDrive);
     }
   }
   content.append(actions);
   const bookingFlow = document.createElement("div");
   bookingFlow.className = "webchat-booking-flow";
+  bookingFlow.id = `webchat-booking-flow-${item.id}`;
   bookingFlow.dataset.bookingFlow = "true";
   bookingFlow.hidden = true;
   card.append(media, content, bookingFlow);
@@ -102,17 +105,22 @@ export function vehicleCard(item) {
 export function vehicleAvailabilityCard(view) {
   const vehicle = view.vehicle || {};
   const status = String(view.availability || "unknown").toLowerCase();
+  const heading = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "Vehicle";
+  const details = [vehicle.variant, vehicle.dealershipTown].filter(Boolean).join(" · ");
   const card = document.createElement("article");
   card.className = "webchat-vehicle-status-card";
   card.append(
     textElement("p", "webchat-flow-eyebrow", "Current vehicle status"),
-    textElement("strong", "", `${vehicle.make || ""} ${vehicle.model || "Vehicle"}`.trim()),
+    textElement("strong", "", heading),
+  );
+  if (details) card.append(textElement("span", "webchat-vehicle-status-detail", details));
+  card.append(
     textElement("span", `webchat-status-pill ${status}`, status === "unknown" ? "Status unavailable" : status),
   );
   const explanation = {
     available: "This vehicle is currently available.",
     reserved: "This vehicle is reserved. You can still register your interest.",
-    sold: "This vehicle has been sold. The sales team can help with alternatives.",
+    sold: "This vehicle has been sold and has no published return date. The sales team can help with alternatives.",
   }[status] || "The current vehicle status could not be confirmed.";
   card.append(textElement("p", "", explanation));
   return card;

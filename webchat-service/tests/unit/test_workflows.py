@@ -14,13 +14,24 @@ class FakeDealership:
         self.calls = []
         self.availability = "available"
         self.test_drive_slots = [
-            {"id": "td-slot-0001", "vehicleId": "veh-001"}
+            {
+                "id": "td-slot-0001",
+                "vehicleId": "veh-001",
+                "startsAt": "2026-08-22T09:00:00Z",
+                "dealershipId": "northstar-manchester",
+                "dealershipName": "Northstar Manchester",
+                "make": "BMW",
+                "model": "i4",
+            }
         ]
         self.workshop_slots = [
             {
                 "id": "ws-slot-0001",
                 "serviceTypeId": "full-service",
                 "dealershipId": "northstar-manchester",
+                "startsAt": "2026-08-22T10:00:00Z",
+                "dealershipName": "Northstar Manchester",
+                "serviceName": "Full service",
             }
         ]
 
@@ -51,6 +62,7 @@ class FakeDealership:
     async def create_workshop_booking(self, body, key):
         self.calls.append(("create_workshop_booking", body, key))
         return {
+            "id": "wsb-001",
             "status": "confirmed",
             "reference": "WORK-123",
             "slotId": body["slotId"],
@@ -85,7 +97,9 @@ def setup(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_write_requires_complete_draft_and_confirmation(tmp_path: Path) -> None:
     conversation_id, workflows, dealership = setup(tmp_path)
-    incomplete = workflows.prepare(conversation_id, "sales_enquiry", {"dealershipId": "northstar-bolton"})
+    incomplete = workflows.prepare(
+        conversation_id, "sales_enquiry", {"dealershipId": "northstar-bolton"}
+    )
     assert incomplete.status == "collecting"
     with pytest.raises(ValueError):
         await workflows.confirm(conversation_id, incomplete.id, str(uuid4()))
@@ -107,13 +121,63 @@ async def test_write_requires_complete_draft_and_confirmation(tmp_path: Path) ->
     first = await workflows.confirm(conversation_id, complete.id, action_id)
     replay = await workflows.confirm(conversation_id, complete.id, action_id)
 
-    assert first == replay == {
-        "status": "received",
-        "reference": "SALE-123",
-        "kind": "sales_enquiry",
-    }
+    assert (
+        first
+        == replay
+        == {
+            "status": "received",
+            "reference": "SALE-123",
+            "kind": "sales_enquiry",
+        }
+    )
     assert len(dealership.calls) == 1
     assert dealership.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_rejects_crossed_action_and_draft_kinds(tmp_path: Path) -> None:
+    conversation_id, workflows, _ = setup(tmp_path)
+    first_draft = workflows.prepare(
+        conversation_id,
+        "sales_enquiry",
+        {
+            "dealershipId": "northstar-bolton",
+            "enquiryType": "general",
+            "message": "Please contact me",
+            **contact(),
+        },
+    )
+    second_draft = workflows.prepare(
+        conversation_id,
+        "test_drive",
+        {
+            **contact(),
+            "vehicleId": "veh-001",
+            "slotId": "td-slot-0001",
+        },
+    )
+    action_id = str(uuid4())
+    await workflows.confirm(conversation_id, first_draft.id, action_id, "sales_enquiry")
+
+    with pytest.raises(ValueError, match="Confirmation action does not match this draft"):
+        await workflows.confirm(conversation_id, second_draft.id, action_id, "test_drive")
+
+    fresh_draft = workflows.prepare(
+        conversation_id,
+        "test_drive",
+        {
+            **contact(),
+            "vehicleId": "veh-001",
+            "slotId": "td-slot-0001",
+        },
+    )
+    with pytest.raises(ValueError, match="Draft kind does not match this confirmation"):
+        await workflows.confirm(
+            conversation_id,
+            fresh_draft.id,
+            str(uuid4()),
+            "workshop_cancel",
+        )
 
 
 def test_contact_is_not_echoed_in_confirmation_summary(tmp_path: Path) -> None:
@@ -209,15 +273,28 @@ async def test_new_bookings_recheck_selected_vehicle_and_slots_before_creation(
         },
     )
 
-    test_drive_result = await workflows.confirm(
-        conversation_id, test_drive.id, str(uuid4())
-    )
-    workshop_result = await workflows.confirm(
-        conversation_id, workshop.id, str(uuid4())
-    )
+    test_drive_result = await workflows.confirm(conversation_id, test_drive.id, str(uuid4()))
+    workshop_result = await workflows.confirm(conversation_id, workshop.id, str(uuid4()))
 
     assert test_drive_result["status"] == "confirmed"
     assert workshop_result["status"] == "confirmed"
+    assert test_drive_result["vehicleLabel"] == "BMW i4"
+    assert test_drive_result["startsAt"] == "2026-08-22T09:00:00Z"
+    assert test_drive_result["dealershipName"] == "Northstar Manchester"
+    assert workshop_result["serviceName"] == "Full service"
+    assert workshop_result["startsAt"] == "2026-08-22T10:00:00Z"
+    assert workshop_result["dealershipName"] == "Northstar Manchester"
+    grant = workflows.repository.latest_grant(conversation_id)
+    assert grant is not None
+    assert grant["booking_record_id"] == "wsb-001"
+    assert workflows.repository.workshop_proof_for_receipt(
+        conversation_id, "WORK-123"
+    ) == {
+        "reference": "WORK-123",
+        "lastName": "Taylor",
+        "registration": "AB12 CDE",
+        "phone": "07700900123",
+    }
     assert ("get_vehicle_availability", "veh-001") in dealership.calls
     assert ("list_test_drive_slots", {"vehicleId": "veh-001"}) in dealership.calls
     assert (
@@ -309,9 +386,7 @@ async def test_atomic_slot_conflict_refreshes_test_drive_options(
             return {"items": items}
 
         async def create_test_drive(self, body, key):
-            raise DealershipError(
-                409, "SLOT_UNAVAILABLE", "That test-drive slot is unavailable."
-            )
+            raise DealershipError(409, "SLOT_UNAVAILABLE", "That test-drive slot is unavailable.")
 
     database = Database(tmp_path / "webchat.sqlite3")
     database.migrate()
@@ -351,9 +426,7 @@ async def test_retryable_confirmation_reuses_the_same_upstream_idempotency_key(
         async def create_test_drive(self, body, key):
             self.keys.append(key)
             if len(self.keys) == 1:
-                raise DealershipError(
-                    503, "PLATFORM_TIMEOUT", "The platform timed out.", True
-                )
+                raise DealershipError(503, "PLATFORM_TIMEOUT", "The platform timed out.", True)
             return {
                 "status": "confirmed",
                 "reference": "TEST-RETRY",
@@ -404,9 +477,7 @@ async def test_ambiguous_workshop_amendment_is_reconciled_before_retry(
         async def update_workshop_booking(self, record_id, changes):
             self.update_calls += 1
             self.record.update(changes)
-            raise DealershipError(
-                503, "PLATFORM_TIMEOUT", "The platform timed out.", True
-            )
+            raise DealershipError(503, "PLATFORM_TIMEOUT", "The platform timed out.", True)
 
         async def get_workshop_booking(self, record_id):
             return dict(self.record)
@@ -427,7 +498,17 @@ async def test_ambiguous_workshop_amendment_is_reconciled_before_retry(
         },
     )
     draft = workflows.prepare(
-        conversation_id, "workshop_amend", {"mileage": 43000}
+        conversation_id,
+        "workshop_amend",
+        {
+            "slotId": "ws-slot-0002",
+            "mileage": 43000,
+            "selectedStartsAt": "2026-08-29T09:00:00Z",
+            "selectedDealershipId": "northstar-stockport",
+            "selectedDealershipName": "Northstar Stockport",
+            "selectedServiceTypeId": "full-service",
+            "selectedServiceName": "Full service",
+        },
     )
 
     result = await workflows.confirm(conversation_id, draft.id, str(uuid4()))
@@ -435,7 +516,10 @@ async def test_ambiguous_workshop_amendment_is_reconciled_before_retry(
     assert result["status"] == "confirmed"
     assert result["reference"] == "WORK-10001"
     assert result["kind"] == "workshop_amend"
-    assert result["slotId"] == "ws-slot-0001"
+    assert result["slotId"] == "ws-slot-0002"
+    assert result["startsAt"] == "2026-08-29T09:00:00Z"
+    assert result["dealershipName"] == "Northstar Stockport"
+    assert result["serviceName"] == "Full service"
     assert dealership.update_calls == 1
 
 
@@ -456,9 +540,7 @@ async def test_ambiguous_workshop_cancellation_is_reconciled_before_retry(
         async def cancel_workshop_booking(self, record_id):
             self.cancel_calls += 1
             self.record["status"] = "cancelled"
-            raise DealershipError(
-                503, "PLATFORM_TIMEOUT", "The platform timed out.", True
-            )
+            raise DealershipError(503, "PLATFORM_TIMEOUT", "The platform timed out.", True)
 
         async def get_workshop_booking(self, record_id):
             return dict(self.record)

@@ -1,48 +1,43 @@
-# Orchestration package
+# Orchestration
 
-Orchestration connects persisted context, semantic understanding, deterministic transitions,
-validated tools, and final presentation. The package is organized by responsibility so the turn
-coordinator remains small.
+This package turns a persisted customer turn into a reviewed response or a validated tool result.
+It has no domain/goal ontology and no online keyword intent router.
 
-## Direct files
-
-| File | Responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `__init__.py` | Package marker |
-| [`orchestrator.py`](./orchestrator.py) | Per-conversation turn lock, deduplication, lifecycle, collaborator coordination, persistence boundary |
-
-## Subpackages
-
-| Folder | Responsibility |
-| --- | --- |
-| [`context/`](./context/README.md) | Build bounded model context and trusted entity/search references |
-| [`planning/`](./planning/README.md) | Versioned domain-goal ontology, typed plan schema, policy, state, and exact tool transitions |
-| [`presentation/`](./presentation/README.md) | Final response/view selection and suggestions |
-| [`routing/`](./routing/README.md) | Post-provider conversation-response safety routing, bounded parsers, focused routes, and fake-planner support |
-| [`tools/`](./tools/README.md) | Strict inputs, registry, capability handlers, forms, workflows, shared result |
-| [`turns/`](./turns/README.md) | Bounded provider/tool loop and semantic-plan policy enforcement |
-
-## Flow
+| `orchestrator.py` | Per-conversation locking, idempotent turn lifecycle, collaborator coordination |
+| `context.py` | Bounded provider/reviewer context facade |
+| `references.py` | Trusted displayed/page entity extraction from closed payloads |
+| `retrieval/` | Semantic tool-candidate and document-evidence retrieval |
+| `planning/` | Planner/reviewer policies and strict review result |
+| `policy.py` | Concrete-call risk, reference, and precondition enforcement |
+| `catalogue/` | One application/MCP definition, validation, discovery, and dispatch boundary |
+| `tools/` | Application-backed tool implementations and structured widget actions |
+| `state.py` | Workflow context reduced from actual executions |
+| `provider_loop.py` | Bounded reviewed provider/tool loop |
+| `presentation/` | Closed renderer validation and application-owned suggestions |
 
 ```text
-Orchestrator
-  → ConversationHistoryBuilder
-  → StructuredActionHandler OR configured provider
-  → schema-validated domain + goal plan
-  → SemanticPlanPolicy
-  → TransitionController
-  → ToolRegistry
-  → BusinessInformationResolver for business-fact questions
-  → ProviderToolLoop / terminal ToolResult
-  → ResponsePresenter
-  → message and turn repositories
+context → semantic retrieval → proposal → independent review → policy
+        → unified catalogue → application/MCP executor → renderer → persistence
 ```
 
-## Dependency rules
+For a persisted assistant prompt, the proposal/reviewer may instead return an argument-free
+accept/decline decision. The orchestrator resolves only the immediately preceding stored typed
+interaction; no production phrase matcher selects the intent or action.
 
-- `orchestrator.py` coordinates; it should not accumulate parsing or card-building logic.
-- `planning.ontology` is the sole owner of domain-goal identifiers and legacy state upgrades.
-- `planning` may choose application tool names but must not call the dealership.
-- `tools` may call focused gateway protocols but must not call AI providers.
-- `presentation` consumes replies/results but must not mutate workflow or repository state.
-- `context` reads persisted state but performs no network or provider work.
+Typed widget actions enter at the catalogue because the UI already supplied the exact operation.
+Evidence-only tool results return to context for another bounded provider iteration.
+
+Dependency rules:
+
+- `orchestrator.py` coordinates and does not parse customer language.
+- `retrieval` ranks candidates but does not make a routing decision.
+- `planning` proposes/reviews but never executes.
+- `policy` validates concrete calls and never calls providers or gateways.
+- `catalogue` owns metadata and dispatch; implementations live behind executors.
+- `tools` call business gateways but never AI providers.
+- `presentation` does not mutate workflows or repositories.
+
+Single-stage concerns stay as modules. A subpackage is reserved for a genuine multi-file subsystem
+such as the catalogue, retrieval, planning, presentation, or application tools.

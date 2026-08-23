@@ -1,1 +1,1 @@
-"""Semantic planning and deterministic state transitions."""
+"""Hosted direct-proposal prompts and independent review contracts."""

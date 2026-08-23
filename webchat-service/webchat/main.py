@@ -7,21 +7,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .api.conversations import router as conversation_router
-from .api.errors import dealership_error_response
+from .api.errors import ApiErrorBoundaryMiddleware, dealership_error_response
 from .api.restoration import ConversationRestorer
+from .api.router import router as conversation_router
 from .api.security import SecurityMiddleware
+from .api.turn_admission import TurnAdmission
 from .config import Settings, get_settings
 from .domain.workflows import WorkflowService
 from .integrations.contracts import LlmProvider
 from .integrations.dealership import DealershipClient, DealershipError
 from .integrations.fake_llm import FakeLlmProvider
-from .integrations.openai_provider import OpenAIProvider
+from .integrations.hosted_llm import HostedLlmProvider
 from .observability.logging import configure_logging
+from .orchestration.catalogue import UnifiedToolCatalog
+from .orchestration.catalogue.mcp import McpServerConfig, McpToolSource
 from .orchestration.orchestrator import Orchestrator
-from .orchestration.planning.plan_policy import SemanticPlanPolicy
-from .orchestration.routing import DeterministicPlanRouter
-from .orchestration.tools.registry import ToolRegistry
+from .orchestration.retrieval import FastEmbedCandidateRetriever
+from .orchestration.tools.executor import ApplicationToolExecutor
 from .persistence.database import Database
 from .persistence.repositories import (
     ConversationRepository,
@@ -46,36 +48,43 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
         app.state.conversations.expire_old()
         app.state.messages = MessageRepository(database)
         app.state.turns = TurnRepository(database)
+        app.state.turn_admission = TurnAdmission(
+            app.state.turns,
+            daily_limit=runtime_settings.webchat_daily_turn_limit,
+            max_concurrent=runtime_settings.webchat_max_concurrent_turns,
+        )
         dealership = DealershipClient(
             runtime_settings.northstar_base_url,
             runtime_settings.northstar_api_key.get_secret_value(),
         )
         app.state.dealership = dealership
         app.state.workflow_repository = WorkflowRepository(database)
-        app.state.restorer = ConversationRestorer(
-            app.state.messages, app.state.workflow_repository
-        )
+        app.state.restorer = ConversationRestorer(app.state.messages, app.state.workflow_repository)
         app.state.workflows = WorkflowService(app.state.workflow_repository, dealership)
-        app.state.tools = ToolRegistry(dealership, app.state.workflows)
+        application_executor = ApplicationToolExecutor(dealership, app.state.workflows)
+        app.state.tools = UnifiedToolCatalog(application_executor)
+        mcp_configs = tuple(McpServerConfig(**server) for server in runtime_settings.mcp_servers())
+        if mcp_configs:
+            app.state.mcp_source = McpToolSource(mcp_configs)
+            for definition in await app.state.mcp_source.discover():
+                app.state.tools.register(definition, app.state.mcp_source)
         selected_provider = provider
-        if selected_provider is None and runtime_settings.llm_provider == "azure":
-            selected_provider = OpenAIProvider(
-                runtime_settings.azure_openai_api_key.get_secret_value(),
-                runtime_settings.azure_openai_deployment,
-                endpoint=runtime_settings.azure_openai_endpoint,
-                azure=True,
-            )
-        if selected_provider is None and runtime_settings.openai_api_key is not None:
-            selected_provider = OpenAIProvider(
-                runtime_settings.openai_api_key.get_secret_value(), runtime_settings.openai_model
+        if selected_provider is None and runtime_settings.hosted_llm_configured:
+            assert runtime_settings.llm_provider_url is not None
+            assert runtime_settings.llm_api_key is not None
+            assert runtime_settings.llm_model is not None
+            selected_provider = HostedLlmProvider(
+                provider_url=runtime_settings.llm_provider_url,
+                api_key=runtime_settings.llm_api_key.get_secret_value(),
+                model=runtime_settings.llm_model,
+                catalogue=app.state.tools,
+                retriever=FastEmbedCandidateRetriever(app.state.tools),
+                request_timeout_seconds=max(
+                    5.0,
+                    runtime_settings.llm_turn_timeout_seconds - 1.0,
+                ),
             )
         selected_provider = selected_provider or FakeLlmProvider()
-        # Natural language always reaches the configured semantic provider first.
-        # Deterministic routing is only a safety net for rejected general responses.
-        semantic_plan_policy = SemanticPlanPolicy(
-            runtime_settings.semantic_plan_policy_mode,
-            DeterministicPlanRouter(),
-        )
         app.state.provider = selected_provider
         app.state.orchestrator = Orchestrator(
             app.state.messages,
@@ -83,7 +92,7 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
             selected_provider,
             app.state.tools,
             app.state.conversations,
-            semantic_plan_policy=semantic_plan_policy,
+            timeout_seconds=runtime_settings.llm_turn_timeout_seconds,
         )
         app.state.database_ready = True
         yield
@@ -94,7 +103,12 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
 
     application = FastAPI(title="Northstar Motors Webchat", lifespan=lifespan)
     application.add_exception_handler(DealershipError, dealership_error_response)
-    application.add_middleware(SecurityMiddleware, settings=runtime_settings)
+    application.add_middleware(ApiErrorBoundaryMiddleware)
+    application.add_middleware(
+        SecurityMiddleware,
+        settings=runtime_settings,
+        requests_per_minute=runtime_settings.webchat_requests_per_minute,
+    )
     application.add_middleware(
         CORSMiddleware,
         allow_origins=[runtime_settings.webchat_allowed_origin],

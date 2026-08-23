@@ -12,6 +12,7 @@ Migrations run in filename order during service startup. Applied filenames are r
 | [`002_workflows.sql`](./002_workflows.sql) | Add workflow drafts, operation attempts, idempotency/action uniqueness, verified booking grants |
 | [`003_initial_page_context.sql`](./003_initial_page_context.sql) | Preserve the conversation's starting page separately from current page context |
 | [`004_conversation_workflow_state.sql`](./004_conversation_workflow_state.sql) | Persist canonical deterministic workflow state on conversations |
+| [`005_message_interactions.sql`](./005_message_interactions.sql) | Attach validated pending-interaction metadata to assistant messages |
 
 The duplicate numeric prefix on the two `002` migrations is historical; full filenames are the
 applied versions and sort deterministically. Do not rename them after use.

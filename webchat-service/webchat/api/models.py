@@ -58,7 +58,9 @@ class PageContext(StrictModel):
     @field_validator("vehicleId")
     @classmethod
     def vehicle_id(cls, value: str | None) -> str | None:
-        if value is not None and (len(value) != 7 or not value.startswith("veh-") or not value[4:].isdigit()):
+        if value is not None and (
+            len(value) != 7 or not value.startswith("veh-") or not value[4:].isdigit()
+        ):
             raise ValueError("vehicleId must match veh-000")
         return value
 
@@ -71,28 +73,42 @@ class TurnAction(StrictModel):
     type: Literal[
         "select_test_drive_vehicle",
         "next_vehicle_page",
+        "search_vehicle_inventory",
         "compare_displayed_vehicles",
         "select_workshop_service",
+        "start_dealership_workshop",
         "try_workshop_location",
         "show_workshop_services",
         "start_vehicle_interest",
         "start_sales_enquiry",
         "start_offer_enquiry",
+        "view_offer",
         "apply_vehicle_preference",
+        "choose_vehicle_filter",
+        "clear_vehicle_filter",
+        "reset_vehicle_search",
+        "start_callback",
+        "start_dealership_message",
+        "show_dealerships",
+        "show_opening_hours",
+        "show_dealership_contact_options",
     ]
     vehicleId: str | None = Field(default=None, pattern=r"^veh-[0-9]{3}$")
     serviceTypeId: str | None = Field(default=None, min_length=1, max_length=80)
     dealershipId: str | None = Field(default=None, min_length=1, max_length=80)
     offerId: str | None = Field(default=None, min_length=1, max_length=80)
-    vehicleFilter: Literal[
-        "make",
-        "model",
-        "fuelType",
-        "transmission",
-        "bodyStyle",
-        "maxPricePence",
-        "maxMileage",
-    ] | None = None
+    vehicleFilter: (
+        Literal[
+            "make",
+            "model",
+            "fuelType",
+            "transmission",
+            "bodyStyle",
+            "maxPricePence",
+            "maxMileage",
+        ]
+        | None
+    ) = None
     vehicleFilterValue: str | int | None = None
 
     @model_validator(mode="after")
@@ -107,12 +123,23 @@ class TurnAction(StrictModel):
             "start_vehicle_interest": {"vehicleId"},
             "start_sales_enquiry": {"vehicleId"},
             "start_offer_enquiry": {"offerId"},
+            "view_offer": {"offerId"},
             "select_workshop_service": {"serviceTypeId"},
+            "start_dealership_workshop": {"dealershipId"},
             "try_workshop_location": {"serviceTypeId", "dealershipId"},
             "next_vehicle_page": set(),
+            "search_vehicle_inventory": set(),
             "compare_displayed_vehicles": set(),
             "show_workshop_services": set(),
             "apply_vehicle_preference": {"vehicleFilter", "vehicleFilterValue"},
+            "choose_vehicle_filter": {"vehicleFilter"},
+            "clear_vehicle_filter": {"vehicleFilter"},
+            "reset_vehicle_search": set(),
+            "start_callback": set(),
+            "start_dealership_message": set(),
+            "show_dealerships": set(),
+            "show_opening_hours": set(),
+            "show_dealership_contact_options": set(),
         }[self.type]
         identifiers.update(
             offerId=self.offerId,
@@ -125,7 +152,10 @@ class TurnAction(StrictModel):
             raise ValueError(f"{self.type} requires {labels}")
         if self.type == "apply_vehicle_preference":
             numeric = self.vehicleFilter in {"maxPricePence", "maxMileage"}
-            if numeric and (isinstance(self.vehicleFilterValue, bool) or not isinstance(self.vehicleFilterValue, int)):
+            if numeric and (
+                isinstance(self.vehicleFilterValue, bool)
+                or not isinstance(self.vehicleFilterValue, int)
+            ):
                 raise ValueError(f"{self.vehicleFilter} requires an integer value")
             if not numeric and not str(self.vehicleFilterValue or "").strip():
                 raise ValueError(f"{self.vehicleFilter} requires a text value")
@@ -149,10 +179,25 @@ class SendTurnRequest(StrictModel):
 
 class ConfirmDraftRequest(StrictModel):
     clientActionId: UUID
+    expectedKind: Literal[
+        "sales_enquiry",
+        "test_drive",
+        "vehicle_interest",
+        "callback",
+        "workshop_booking",
+        "workshop_amend",
+        "workshop_cancel",
+        "dealership_message",
+        "part_exchange",
+    ] | None = None
 
 
 class TestDriveOptionsRequest(StrictModel):
     vehicleId: str = Field(pattern=r"^veh-[0-9]{3}$")
+
+
+class OfferEnquiryOptionsRequest(StrictModel):
+    offerId: str = Field(pattern=r"^offer-[0-9]{2}$")
 
 
 class WorkshopOptionsRequest(StrictModel):
@@ -271,3 +316,4 @@ class BookingLookupRequest(StrictModel):
 
 class WorkshopExistingActionRequest(StrictModel):
     mode: Literal["amend", "cancel"]
+    bookingReference: str | None = Field(default=None, min_length=3, max_length=80)

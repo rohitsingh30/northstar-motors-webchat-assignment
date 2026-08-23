@@ -11,30 +11,76 @@ from webchat.persistence.repositories import WorkflowRepository
 
 REQUIRED_FIELDS: dict[str, set[str]] = {
     "sales_enquiry": {
-        "dealershipId", "enquiryType", "message", "firstName", "lastName", "email", "phone"
+        "dealershipId",
+        "enquiryType",
+        "message",
+        "firstName",
+        "lastName",
+        "email",
+        "phone",
     },
-    "test_drive": {
-        "slotId", "vehicleId", "firstName", "lastName", "email", "phone"
-    },
+    "test_drive": {"slotId", "vehicleId", "firstName", "lastName", "email", "phone"},
     "vehicle_interest": {"vehicleId", "firstName", "lastName", "email", "phone"},
-    "callback": {
-        "dealershipId", "department", "reason", "firstName", "lastName", "email", "phone"
-    },
+    "callback": {"dealershipId", "department", "reason", "firstName", "lastName", "email", "phone"},
     "workshop_booking": {
-        "slotId", "serviceTypeId", "dealershipId", "registration", "mileage",
-        "firstName", "lastName", "email", "phone"
+        "slotId",
+        "serviceTypeId",
+        "dealershipId",
+        "registration",
+        "mileage",
+        "firstName",
+        "lastName",
+        "email",
+        "phone",
     },
     "workshop_amend": {"verifiedGrantId"},
     "workshop_cancel": {"verifiedGrantId"},
     "dealership_message": {
-        "dealershipId", "department", "subject", "message", "preferredContactMethod",
-        "firstName", "lastName", "email", "phone"
+        "dealershipId",
+        "department",
+        "subject",
+        "message",
+        "preferredContactMethod",
+        "firstName",
+        "lastName",
+        "email",
+        "phone",
     },
     "part_exchange": {
-        "dealershipId", "registration", "mileage", "condition", "firstName", "lastName",
-        "email", "phone"
+        "dealershipId",
+        "registration",
+        "mileage",
+        "condition",
+        "firstName",
+        "lastName",
+        "email",
+        "phone",
     },
 }
+
+
+def offer_enquiry_fields(offer: dict[str, Any]) -> dict[str, Any]:
+    """Build a sales-enquiry prefill from an authoritative selected offer."""
+    label = " ".join(
+        str(offer.get(field) or "").strip() for field in ("make", "model", "productType")
+    ).strip()
+    fields: dict[str, Any] = {
+        "enquiryType": "finance",
+        "message": (
+            f"I am interested in the currently published {label} offer."
+            if label
+            else "I am interested in this currently published offer."
+        ),
+    }
+    vehicle_id = offer.get("vehicleId")
+    if (
+        isinstance(vehicle_id, str)
+        and len(vehicle_id) == 7
+        and vehicle_id.startswith("veh-")
+        and vehicle_id[4:].isdigit()
+    ):
+        fields["vehicleId"] = vehicle_id
+    return fields
 
 
 def material_hash(kind: str, fields: dict[str, Any]) -> str:
@@ -75,7 +121,9 @@ class WorkflowService:
                 cleaned["verifiedGrantId"] = grant["id"]
                 verified_snapshot = json.loads(grant.get("booking_snapshot_json") or "{}")
         missing = sorted(REQUIRED_FIELDS[kind] - cleaned.keys())
-        if kind == "workshop_amend" and not any(key in cleaned for key in ("slotId", "mileage", "notes")):
+        if kind == "workshop_amend" and not any(
+            key in cleaned for key in ("slotId", "mileage", "notes")
+        ):
             missing.append("one of slotId, mileage, or notes")
         status = "collecting" if missing else "awaiting_confirmation"
         draft = self.repository.create_or_replace(
@@ -99,14 +147,32 @@ class WorkflowService:
     def safe_summary(kind: str, fields: dict[str, Any]) -> dict[str, Any]:
         # Contact details are deliberately summarized, not echoed into a confirmation card.
         contact_fields = {"firstName", "lastName", "email", "phone"}
-        hidden = contact_fields | {"verifiedGrantId"}
+        hidden = contact_fields | {
+            "verifiedGrantId",
+            "selectedStartsAt",
+            "selectedDealershipId",
+            "selectedDealershipName",
+            "selectedServiceTypeId",
+            "selectedServiceName",
+        }
         summary = {key: value for key, value in fields.items() if key not in hidden}
         summary["contactProvided"] = all(fields.get(key) for key in contact_fields)
         summary["kind"] = kind
         return summary
 
-    async def confirm(self, conversation_id: str, draft_id: str, client_action_id: str) -> dict:
-        attempt = self.repository.begin_confirmation(conversation_id, draft_id, client_action_id)
+    async def confirm(
+        self,
+        conversation_id: str,
+        draft_id: str,
+        client_action_id: str,
+        expected_kind: str | None = None,
+    ) -> dict:
+        attempt = self.repository.begin_confirmation(
+            conversation_id,
+            draft_id,
+            client_action_id,
+            expected_kind,
+        )
         if attempt["state"] == "succeeded":
             return json.loads(attempt["result_json"])
         if attempt["state"] == "failed":
@@ -123,10 +189,29 @@ class WorkflowService:
                 draft["kind"], fields, attempt["idempotency_key"], conversation_id
             )
         except DealershipError as error:
-            self.repository.fail_attempt(
-                attempt["id"], draft_id, error.code, error.retryable
-            )
+            self.repository.fail_attempt(attempt["id"], draft_id, error.code, error.retryable)
             raise
+        if (
+            draft["kind"] == "workshop_booking"
+            and platform_result.get("id")
+            and platform_result.get("reference")
+        ):
+            snapshot = {
+                "reference": platform_result.get("reference"),
+                "slotId": platform_result.get("slotId"),
+                "startsAt": platform_result.get("startsAt"),
+                "dealershipId": platform_result.get("dealershipId"),
+                "dealershipName": platform_result.get("dealershipName"),
+                "serviceTypeId": platform_result.get("serviceTypeId"),
+                "serviceTypeName": platform_result.get("serviceName"),
+                "status": platform_result.get("status"),
+            }
+            self.repository.create_grant(
+                conversation_id,
+                str(platform_result["id"]),
+                str(platform_result["reference"]),
+                {key: value for key, value in snapshot.items() if value is not None},
+            )
         result = self.public_receipt(draft["kind"], platform_result)
         self.repository.succeed_attempt(attempt["id"], draft_id, result)
         return result
@@ -141,6 +226,10 @@ class WorkflowService:
             "dealershipId",
             "serviceTypeId",
             "startsAt",
+            "dealershipName",
+            "vehicleLabel",
+            "serviceName",
+            "registration",
             "estimateLowPence",
             "estimateHighPence",
             "estimateNotice",
@@ -169,9 +258,7 @@ class WorkflowService:
             raise ValueError("Unsupported workflow kind")
         return await self._mutate_verified_booking(kind, fields, conversation_id)
 
-    async def _create_test_drive(
-        self, fields: dict[str, Any], idempotency_key: str
-    ) -> dict:
+    async def _create_test_drive(self, fields: dict[str, Any], idempotency_key: str) -> dict:
         vehicle_id = str(fields["vehicleId"])
         slot_id = str(fields["slotId"])
         availability = await self.dealership.get_vehicle_availability(vehicle_id)
@@ -190,18 +277,25 @@ class WorkflowService:
                 recovery=self._vehicle_recovery(vehicle_id, current_state),
             )
         slots = await self.dealership.list_test_drive_slots({"vehicleId": vehicle_id})
-        if not _contains_slot(slots, slot_id):
-            raise self._slot_unavailable_error(
-                "test_drive", slots, vehicle_id=vehicle_id
-            )
+        selected_slot = _find_slot(slots, slot_id)
+        if selected_slot is None:
+            raise self._slot_unavailable_error("test_drive", slots, vehicle_id=vehicle_id)
         payload = {key: value for key, value in fields.items() if key != "vehicleId"}
         try:
-            return await self.dealership.create_test_drive(payload, idempotency_key)
+            result = dict(await self.dealership.create_test_drive(payload, idempotency_key))
+            result.setdefault("vehicleId", vehicle_id)
+            for key in ("startsAt", "dealershipId", "dealershipName"):
+                if selected_slot.get(key):
+                    result.setdefault(key, selected_slot[key])
+            vehicle_label = " ".join(
+                str(selected_slot.get(key) or "").strip() for key in ("make", "model")
+            ).strip()
+            if vehicle_label:
+                result.setdefault("vehicleLabel", vehicle_label)
+            return result
         except DealershipError as error:
             if error.code == "SLOT_UNAVAILABLE":
-                fresh = await self.dealership.list_test_drive_slots(
-                    {"vehicleId": vehicle_id}
-                )
+                fresh = await self.dealership.list_test_drive_slots({"vehicleId": vehicle_id})
                 raise self._slot_unavailable_error(
                     "test_drive", fresh, vehicle_id=vehicle_id
                 ) from error
@@ -217,16 +311,15 @@ class WorkflowService:
                 ) from error
             raise
 
-    async def _create_workshop_booking(
-        self, fields: dict[str, Any], idempotency_key: str
-    ) -> dict:
+    async def _create_workshop_booking(self, fields: dict[str, Any], idempotency_key: str) -> dict:
         slot_id = str(fields["slotId"])
         filters = {
             "serviceTypeId": fields["serviceTypeId"],
             "dealershipId": fields["dealershipId"],
         }
         slots = await self.dealership.list_workshop_slots(filters)
-        if not _contains_slot(slots, slot_id):
+        selected_slot = _find_slot(slots, slot_id)
+        if selected_slot is None:
             raise self._slot_unavailable_error("workshop", slots)
         payload = {
             key: value
@@ -234,9 +327,13 @@ class WorkflowService:
             if key not in {"serviceTypeId", "dealershipId"}
         }
         try:
-            return await self.dealership.create_workshop_booking(
-                payload, idempotency_key
-            )
+            result = dict(await self.dealership.create_workshop_booking(payload, idempotency_key))
+            result.setdefault("dealershipId", fields["dealershipId"])
+            result.setdefault("serviceTypeId", fields["serviceTypeId"])
+            for key in ("startsAt", "dealershipName", "serviceName"):
+                if selected_slot.get(key):
+                    result.setdefault(key, selected_slot[key])
+            return result
         except DealershipError as error:
             if error.code == "SLOT_UNAVAILABLE":
                 fresh = await self.dealership.list_workshop_slots(filters)
@@ -288,14 +385,10 @@ class WorkflowService:
             "suggestions": suggestions,
         }
 
-    async def _create_vehicle_interest(
-        self, fields: dict[str, Any], idempotency_key: str
-    ) -> dict:
+    async def _create_vehicle_interest(self, fields: dict[str, Any], idempotency_key: str) -> dict:
         availability = await self.dealership.get_vehicle_availability(fields["vehicleId"])
         if availability.get("availability") != "reserved":
-            raise DealershipError(
-                409, "VEHICLE_NOT_RESERVED", "The vehicle is not reserved."
-            )
+            raise DealershipError(409, "VEHICLE_NOT_RESERVED", "The vehicle is not reserved.")
         return await self.dealership.create_vehicle_interest(fields, idempotency_key)
 
     async def _mutate_verified_booking(
@@ -308,20 +401,15 @@ class WorkflowService:
                 "BOOKING_VERIFICATION_REQUIRED",
                 "Booking verification has expired.",
             )
-        changes = {
-            key: fields[key]
-            for key in ("slotId", "mileage", "notes")
-            if key in fields
-        }
+        changes = {key: fields[key] for key in ("slotId", "mileage", "notes") if key in fields}
+        snapshot = json.loads(grant.get("booking_snapshot_json") or "{}")
         try:
             if kind == "workshop_amend":
                 result = await self.dealership.update_workshop_booking(
                     grant["booking_record_id"], changes
                 )
             else:
-                result = await self.dealership.cancel_workshop_booking(
-                    grant["booking_record_id"]
-                )
+                result = await self.dealership.cancel_workshop_booking(grant["booking_record_id"])
         except DealershipError as error:
             if not error.retryable:
                 raise
@@ -331,6 +419,38 @@ class WorkflowService:
             if reconciled is None:
                 raise
             result = reconciled
+        if kind == "workshop_amend":
+            result = dict(result)
+            result.setdefault(
+                "slotId",
+                result.get("slot_id") or fields.get("slotId") or snapshot.get("slotId"),
+            )
+            result.setdefault(
+                "startsAt",
+                fields.get("selectedStartsAt") or snapshot.get("startsAt"),
+            )
+            result.setdefault(
+                "dealershipId",
+                fields.get("selectedDealershipId")
+                or result.get("dealership_id")
+                or snapshot.get("dealershipId"),
+            )
+            result.setdefault(
+                "dealershipName",
+                fields.get("selectedDealershipName")
+                or snapshot.get("dealershipName")
+                or snapshot.get("dealershipTown"),
+            )
+            result.setdefault(
+                "serviceTypeId",
+                fields.get("selectedServiceTypeId")
+                or result.get("service_type_id")
+                or snapshot.get("serviceTypeId"),
+            )
+            result.setdefault(
+                "serviceName",
+                fields.get("selectedServiceName") or snapshot.get("serviceTypeName"),
+            )
         self.repository.revoke_grant(grant["id"])
         return result
 
@@ -352,7 +472,9 @@ class WorkflowService:
             booking = await self.dealership.lookup_workshop_booking(proof)
         except DealershipError as error:
             if error.status == 404:
-                raise DealershipError(404, "BOOKING_NOT_FOUND", "No workshop booking matched those details.") from error
+                raise DealershipError(
+                    404, "BOOKING_NOT_FOUND", "No workshop booking matched those details."
+                ) from error
             raise
         safe_snapshot = {
             key: booking.get(key)
@@ -374,5 +496,12 @@ class WorkflowService:
         return {"booking": safe_snapshot}
 
 
-def _contains_slot(data: dict[str, Any], slot_id: str) -> bool:
-    return any(str(item.get("id")) == slot_id for item in data.get("items", []))
+def _find_slot(data: dict[str, Any], slot_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in data.get("items", [])
+            if isinstance(item, dict) and str(item.get("id")) == slot_id
+        ),
+        None,
+    )

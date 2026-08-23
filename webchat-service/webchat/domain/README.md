@@ -9,6 +9,7 @@ boundary. It does not parse HTTP requests or render browser components.
 | --- | --- |
 | `__init__.py` | Package marker |
 | [`models.py`](./models.py) | Immutable persisted `Message` and `Turn` records |
+| [`interactions.py`](./interactions.py) | Validated, persisted contracts for pending assistant prompts and application-owned actions |
 | [`business_semantics.py`](./business_semantics.py) | Exact GBP and vehicle-availability wording |
 | [`workflows.py`](./workflows.py) | Required fields, material hashing, draft preparation, confirmation execution, public receipts, verified booking lookup/mutation |
 

@@ -1,17 +1,20 @@
-# Fake LLM integration
+# Offline provider
 
-This package supplies deterministic development and test behaviour when a hosted model is not
-configured. It implements the same validated V2 domain-goal `TurnPlan` boundary as Azure/OpenAI.
+This package supplies repeatable development/test behavior when hosted configuration is absent.
+It emits the same concrete `ToolCall` boundary as hosted mode, then shares policy, catalogue,
+application tools, workflow state, drafts, and rendering.
 
-## Files
-
-| File | Responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `__init__.py` | Export the fake provider and deterministic planner |
-| [`provider.py`](./provider.py) | Enforce exactly one schema-validated typed plan per provider turn |
-| [`planner.py`](./planner.py) | Cover fake semantic cases, including contextual offer enquiries, and adapt confident application routes into canonical plans |
+| `provider.py` | Thin provider adapter |
+| `planner.py` | Offline-only semantic rules and direct tool proposals |
+| `routing/` | Normalized context, parsers, focused deterministic routes, trusted fact responses |
 
-Every fake plan is validated by the same discriminated schema as hosted output. The planner may
-consume the shared deterministic router. The online path does not depend on this fake-provider
-package and consults deterministic routing only after a proposed `conversation.respond`.
-Dynamic facts still come through the shared tool registry.
+The fake provider does not simulate independent hosted review because its output is deterministic.
+No hosted adapter, shared policy, or provider loop may import this package. Offline keyword/regex
+rules are test fixtures for local parity, not production routing architecture.
+
+For repeatable interaction tests, the fake recognizes only the canonical exact replies `yes` and
+`no` when application-owned pending interaction metadata exists. This is an offline protocol, not
+a production language classifier. Hosted mode interprets arbitrary natural-language acceptance or
+rejection with the planner and validates it with the independent reviewer.

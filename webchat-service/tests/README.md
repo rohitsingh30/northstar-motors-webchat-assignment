@@ -8,7 +8,7 @@ dependencies. They do not require edits to `dealership-platform`.
 | Path | Responsibility |
 | --- | --- |
 | [`test_health.py`](./test_health.py) | Health/readiness, production provider validation, and hosted widget entry asset |
-| [`unit/`](./unit/README.md) | Focused deterministic functions, handlers, providers, repositories, transitions, workflows |
+| [`unit/`](./unit/README.md) | Focused deterministic functions, handlers, providers, retrieval, policy, state, repositories, workflows |
 | [`integration/`](./integration/README.md) | FastAPI/session/security/restoration and end-to-end structured flow contracts |
 | [`contract/`](./contract/README.md) | Dealership HTTP adapter contract using representative mock responses |
 | [`browser/`](./browser/README.md) | Isolated Node ES-module tests for browser-only utilities |
@@ -29,8 +29,8 @@ docker run --rm northstar-webchat-test:refactor pytest -q tests/contract
 node --test webchat-service/tests/browser/*.mjs
 ```
 
-The full current Python suite contains 335 tests. A Starlette/httpx deprecation warning is emitted by the
-test-client dependency and is not a test failure.
+A Starlette/httpx deprecation warning is emitted by the test-client dependency and is not a test
+failure.
 
 ## Test boundaries
 

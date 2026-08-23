@@ -12,15 +12,20 @@ export function createChatApi(apiBase = "/api/chat/v1") {
       const problem = await response.json().catch(() => ({}));
       const validationErrors = Array.isArray(problem.detail) ? problem.detail : [];
       const fieldErrors = { ...(problem.error?.fieldErrors || {}) };
+      const formErrors = [];
       validationErrors.forEach((item) => {
         const field = item.loc?.at(-1);
-        if (typeof field === "string") {
-          fieldErrors[field] = String(item.msg || "Check this field.").replace(/^Value error, /, "");
+        const message = String(item.msg || "Check this field.").replace(/^Value error, /, "");
+        if (typeof field === "string" && !["body", "query", "path"].includes(field)) {
+          fieldErrors[field] = message;
+        } else {
+          formErrors.push(message);
         }
       });
       const error = new Error(
         problem.error?.message
-          || (Object.keys(fieldErrors).length ? "Check the highlighted contact details." : null)
+          || formErrors[0]
+          || (Object.keys(fieldErrors).length ? "Check the highlighted fields." : null)
           || problem.detail
           || "Northstar chat is unavailable.",
       );
@@ -54,12 +59,12 @@ export function createChatApi(apiBase = "/api/chat/v1") {
       `/conversations/${encodeURIComponent(conversationId)}`,
       { method: "DELETE" },
     ),
-    confirmDraft: (conversationId, draftId, clientActionId) => request(
+    confirmDraft: (conversationId, draftId, clientActionId, expectedKind = "") => request(
       `/conversations/${encodeURIComponent(conversationId)}/drafts/${encodeURIComponent(draftId)}/confirm`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientActionId }),
+        body: JSON.stringify({ clientActionId, ...(expectedKind ? { expectedKind } : {}) }),
       },
     ),
     cancelDraft: (conversationId, draftId) => request(
@@ -74,12 +79,12 @@ export function createChatApi(apiBase = "/api/chat/v1") {
         body: JSON.stringify(proof),
       },
     ),
-    prepareExistingWorkshopAction: (conversationId, mode) => request(
+    prepareExistingWorkshopAction: (conversationId, mode, bookingReference = "") => request(
       `/conversations/${encodeURIComponent(conversationId)}/workshop-existing-action`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, ...(bookingReference ? { bookingReference } : {}) }),
       },
     ),
     getTestDriveOptions: (conversationId, vehicleId) => request(
@@ -96,6 +101,14 @@ export function createChatApi(apiBase = "/api/chat/v1") {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(details),
+      },
+    ),
+    getOfferEnquiryOptions: (conversationId, offerId) => request(
+      `/conversations/${encodeURIComponent(conversationId)}/offer-enquiry-options`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offerId }),
       },
     ),
     getWorkshopOptions: (conversationId, serviceTypeId, dealershipId) => request(

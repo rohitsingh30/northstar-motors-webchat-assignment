@@ -9,11 +9,16 @@ from typing import Any, Protocol
 
 from webchat.domain.business_semantics import availability_text, money
 from webchat.orchestration.presentation.suggestions import (
+    current_page_vehicle_suggestions,
     no_vehicle_results_suggestions,
     unknown_dealership_suggestions,
     vehicle_availability_suggestions,
     vehicle_comparison_suggestions,
+    vehicle_facet_prompt,
+    vehicle_facet_suggestions,
+    vehicle_filter_summary,
     vehicle_search_suggestions,
+    vehicle_starting_point_suggestions,
 )
 from webchat.orchestration.tools.helpers import dealership_in_town
 from webchat.orchestration.tools.inputs import (
@@ -21,6 +26,7 @@ from webchat.orchestration.tools.inputs import (
     StableId,
     VehicleComparison,
     VehicleModelComparison,
+    VehiclePreferenceRequest,
     VehicleSearch,
 )
 from webchat.orchestration.tools.result import ToolResult
@@ -31,9 +37,7 @@ class VehicleGateway(Protocol):
 
     async def get_vehicle(self, vehicle_id: str) -> dict[str, Any]: ...
 
-    async def get_vehicle_availability(
-        self, vehicle_id: str
-    ) -> dict[str, Any]: ...
+    async def get_vehicle_availability(self, vehicle_id: str) -> dict[str, Any]: ...
 
     async def list_dealerships(self) -> dict[str, Any]: ...
 
@@ -94,12 +98,15 @@ class VehicleToolHandler:
         self.dealership = dealership
         self.routes: dict[str, ToolMethod] = {
             "search_vehicles": self._search,
+            "reset_vehicle_search": self._search,
+            "refine_vehicle_search": self._search,
             "select_page_vehicles": self._select_from_page,
             "get_vehicle_facets": self._facets,
             "get_vehicle": self._get,
             "get_vehicle_availability": self._availability,
             "compare_vehicles": self._compare,
             "compare_vehicle_models": self._compare_models,
+            "show_vehicle_preferences": self._preferences,
         }
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
@@ -129,13 +136,18 @@ class VehicleToolHandler:
         data = await self.dealership.search_vehicles(query)
         items = [vehicle_item(item) for item in data.get("items", [])]
         total = int(data.get("pagination", {}).get("totalItems", len(items)))
+        filter_summary = vehicle_filter_summary(search_state)
         if total == 0:
-            requested = query.get("q") or query.get("make") or "that description"
+            current_filters = filter_summary or "the requested criteria"
             return ToolResult(
-                f"I couldn't find any available vehicles matching {requested}. "
-                "Try another make, model, budget, or location.",
+                f"I couldn't find any available vehicles matching your current filters: "
+                f"{current_filters}. Try changing or clearing a filter.",
                 "suggestion_list",
-                {"version": 1, "suggestions": no_vehicle_results_suggestions()},
+                {
+                    "version": 1,
+                    "filterSummary": filter_summary,
+                    "suggestions": no_vehicle_results_suggestions(search_state),
+                },
                 data,
             )
 
@@ -158,6 +170,7 @@ class VehicleToolHandler:
                 "page": page,
                 "pageSize": page_size,
                 "search": {"filters": search_state, "page": page},
+                "filterSummary": filter_summary,
                 "suggestions": suggestions,
             },
             data,
@@ -165,42 +178,14 @@ class VehicleToolHandler:
 
     @staticmethod
     def _extract_town(query: dict[str, Any]) -> str | None:
-        town = query.pop("dealershipTown", None)
-        if town or not query.get("q"):
-            return town
-        location_match = re.search(
-            r"\b(?:in|at|near)\s+([a-z][a-z -]{1,60})",
-            str(query["q"]),
-            re.IGNORECASE,
-        )
-        if not location_match:
-            return None
-        town = re.split(
-            r"\b(?:below|under|less than|up to|with|near|at|on|from)\b",
-            location_match.group(1),
-            maxsplit=1,
-            flags=re.IGNORECASE,
-        )[0].strip(" .,?!")
-        remaining_query = re.sub(
-            r"\b(?:cars?|vehicles?)\b", "", str(query["q"])[: location_match.start()]
-        ).strip(" .,?!")
-        if remaining_query:
-            query["q"] = remaining_query
-        else:
-            query.pop("q", None)
-        return town
+        return query.pop("dealershipTown", None)
 
     async def _select_from_page(self, arguments: dict[str, Any]) -> ToolResult:
         selection = PageVehicleSelection.model_validate(arguments)
         records = await asyncio.gather(
-            *(
-                self.dealership.get_vehicle(vehicle_id)
-                for vehicle_id in selection.vehicleIds
-            )
+            *(self.dealership.get_vehicle(vehicle_id) for vehicle_id in selection.vehicleIds)
         )
-        filtered = [
-            record for record in records if self._matches_selection(record, selection)
-        ]
+        filtered = [record for record in records if self._matches_selection(record, selection)]
         sort_keys = {
             "newest": lambda item: -int(item.get("year") or 0),
             "priceAsc": lambda item: int(item.get("pricePence") or 0),
@@ -233,7 +218,7 @@ class VehicleToolHandler:
                 "page": 1,
                 "pageSize": selection.limit,
                 "scope": "currentPage",
-                "suggestions": [],
+                "suggestions": current_page_vehicle_suggestions(len(items)),
             },
             {"items": filtered, "scope": "currentPage"},
         )
@@ -264,9 +249,21 @@ class VehicleToolHandler:
             ("dealershipId", selection.dealershipId),
             ("dealershipTown", selection.dealershipTown),
         ):
-            if expected is not None and str(record.get(field) or "").casefold() != str(
-                expected
-            ).casefold():
+            if (
+                expected is not None
+                and str(record.get(field) or "").casefold() != str(expected).casefold()
+            ):
+                return False
+        for field, excluded in (
+            ("make", selection.excludedMakes),
+            ("model", selection.excludedModels),
+            ("fuelType", selection.excludedFuelTypes),
+            ("transmission", selection.excludedTransmissions),
+            ("bodyStyle", selection.excludedBodyStyles),
+        ):
+            if excluded and str(record.get(field) or "").casefold() in {
+                str(value).casefold() for value in excluded
+            }:
                 return False
         numeric_limits = (
             ("pricePence", selection.minPricePence, lambda actual, limit: actual < limit),
@@ -335,17 +332,12 @@ class VehicleToolHandler:
 
     async def _compare(self, arguments: dict[str, Any]) -> ToolResult:
         comparison = VehicleComparison.model_validate(arguments)
-        if any(
-            not re.fullmatch(r"veh-[0-9]{3}", item)
-            for item in comparison.vehicleIds
-        ):
+        if any(not re.fullmatch(r"veh-[0-9]{3}", item) for item in comparison.vehicleIds):
             raise ValueError("invalid vehicle ID")
         vehicle_ids = list(dict.fromkeys(comparison.vehicleIds))
         if len(vehicle_ids) < 2:
             return _unresolved_comparison([])
-        records = [
-            await self.dealership.get_vehicle(vehicle_id) for vehicle_id in vehicle_ids
-        ]
+        records = [await self.dealership.get_vehicle(vehicle_id) for vehicle_id in vehicle_ids]
         return _comparison_result(
             records, f"Compared {len(records)} vehicles using current stock details."
         )
@@ -371,6 +363,24 @@ class VehicleToolHandler:
         if len(records) < 2:
             return _unresolved_comparison(records, resolve_models=True)
         return _comparison_result(records, f"Compared {len(records)} current vehicles.")
+
+    async def _preferences(self, arguments: dict[str, Any]) -> ToolResult:
+        request = VehiclePreferenceRequest.model_validate(arguments)
+        if request.dimension == "startingPoint":
+            suggestions = vehicle_starting_point_suggestions()
+            text = "Tell me what matters most, or choose a starting point below."
+        else:
+            facets = await self._facets({})
+            suggestions = vehicle_facet_suggestions(
+                request.dimension, facets.facts.get(request.dimension, [])
+            )
+            text = vehicle_facet_prompt(request.dimension, suggestions)
+        return ToolResult(
+            text,
+            "suggestion_list",
+            {"version": 1, "suggestions": suggestions},
+            {"dimension": request.dimension},
+        )
 
 
 def _live_numeric_choices(values: set[int], *, rounding: int) -> list[int]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
+from ipaddress import ip_address
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -54,7 +55,7 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             if not missing_allowed_for_tests and origin != self.settings.webchat_allowed_origin:
                 return problem(403, "ORIGIN_REJECTED", "The request origin is not allowed.")
 
-        client = request.client.host if request.client else "unknown"
+        client = self._client_address(request)
         now = time.monotonic()
         recent = self.requests[client]
         while recent and recent[0] < now - 60:
@@ -63,3 +64,12 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             return problem(429, "RATE_LIMITED", "Too many chat requests. Please wait and retry.")
         recent.append(now)
         return None
+
+    def _client_address(self, request: Request) -> str:
+        if self.settings.webchat_trust_proxy_headers:
+            forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+            try:
+                return str(ip_address(forwarded))
+            except ValueError:
+                return "unknown"
+        return request.client.host if request.client else "unknown"

@@ -1,7 +1,11 @@
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from webchat.integrations.fake_llm import FakeLlmProvider
-from webchat.orchestration.routing.parsers import location_query
+from webchat.integrations.fake_llm.routing.parsers import location_query
+from webchat.orchestration.context import current_dealership_reference_context
 
 
 @pytest.mark.parametrize(
@@ -17,8 +21,16 @@ def test_town_is_extracted_from_common_dealership_phrasing(text: str, town: str)
     assert location_query(text) == town
 
 
-def test_generic_dealership_request_is_not_mistaken_for_a_town() -> None:
-    assert location_query("show me dealership contact details") is None
+@pytest.mark.parametrize(
+    "text",
+    [
+        "show me dealership contact details",
+        "is the dealership open tomorrow?",
+        "does the dealership have a service department?",
+    ],
+)
+def test_generic_dealership_request_is_not_mistaken_for_a_town(text: str) -> None:
+    assert location_query(text) is None
 
 
 @pytest.mark.asyncio
@@ -27,9 +39,8 @@ async def test_named_dealership_contact_question_is_filtered_to_that_town() -> N
         [{"role": "user", "content": "What is the phone number and email for Manchester sales?"}]
     )
 
-    assert reply.plan is not None
-    assert (reply.plan.domain, reply.plan.goal) == ("dealership", "view_contact")
-    assert reply.plan.arguments == {"town": "Manchester"}
+    assert reply.tool_calls[0].name == "list_dealerships"
+    assert reply.tool_calls[0].arguments == {"town": "Manchester"}
 
 
 @pytest.mark.asyncio
@@ -38,12 +49,8 @@ async def test_named_dealership_hours_are_filtered_to_that_town() -> None:
         [{"role": "user", "content": "Manchester dealership holiday opening hours"}]
     )
 
-    assert reply.plan is not None
-    assert (reply.plan.domain, reply.plan.goal) == (
-        "dealership",
-        "view_opening_hours",
-    )
-    assert reply.plan.arguments == {"town": "Manchester"}
+    assert reply.tool_calls[0].name == "list_holiday_opening_hours"
+    assert reply.tool_calls[0].arguments == {"town": "Manchester"}
 
 
 @pytest.mark.asyncio
@@ -52,8 +59,52 @@ async def test_named_department_hours_keep_both_town_and_department() -> None:
         [{"role": "user", "content": "Stockport parts opening hours"}]
     )
 
-    assert reply.plan is not None
-    assert reply.plan.arguments == {
+    assert reply.tool_calls[0].name == "list_opening_hours"
+    assert reply.tool_calls[0].arguments == {
         "town": "Stockport",
         "department": "parts",
     }
+
+
+def test_displayed_dealership_context_preserves_exact_ids_and_towns() -> None:
+    messages = [
+        SimpleNamespace(
+            role="assistant",
+            view_type="dealership_list",
+            view_payload_json=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "dealer-bolton",
+                            "name": "Northstar Bolton",
+                            "town": "Bolton",
+                            "postcode": "BL3 2AW",
+                        },
+                        {
+                            "id": "dealer-manchester",
+                            "name": "Northstar Manchester",
+                            "town": "Manchester",
+                            "postcode": "M20 2YY",
+                        },
+                    ]
+                }
+            ),
+        )
+    ]
+
+    assert current_dealership_reference_context(messages) == [
+        {
+            "position": 1,
+            "dealershipId": "dealer-bolton",
+            "name": "Northstar Bolton",
+            "town": "Bolton",
+            "postcode": "BL3 2AW",
+        },
+        {
+            "position": 2,
+            "dealershipId": "dealer-manchester",
+            "name": "Northstar Manchester",
+            "town": "Manchester",
+            "postcode": "M20 2YY",
+        },
+    ]

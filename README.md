@@ -18,9 +18,11 @@ Copy the environment template:
 cp .env.example .env
 ```
 
-Set `OPENAI_API_KEY` in `.env` for AI responses. Without it, the service uses a deterministic local
-provider so the application and automated tests can run without network access. Do not add either
-the OpenAI key or dealership API key to browser code.
+Set the three provider-neutral `LLM_*` values in `.env` for hosted AI responses. The planner and
+reviewer are compulsory separate requests to the supplied Responses-compatible provider and share
+one API key and model.
+Without a complete hosted configuration, development and test environments use the deterministic
+local provider. Do not add either the LLM key or dealership API key to browser code.
 
 ```bash
 docker compose up --build -d
@@ -48,37 +50,31 @@ browser-delivered code.
 Start with:
 
 - [PRODUCT-BRIEF.md](./PRODUCT-BRIEF.md) for the product requirements;
-- [docs/PRD.md](./docs/PRD.md) for the detailed product requirements and acceptance criteria;
-- [docs/HLD.md](./docs/HLD.md) for the current architecture, trust boundaries, and decisions;
-- [docs/LLD.md](./docs/LLD.md) for the current component, data, API, workflow, and test design;
 - [webchat-service/README.md](./webchat-service/README.md) for service operation and the complete
   module documentation map;
-- [docs/diagrams/README.md](./docs/diagrams/README.md) for architecture images and editable sources;
 - [docs/INTEGRATION-GUIDE.md](./docs/INTEGRATION-GUIDE.md) for API usage;
-- [docs/WIDGET-INTEGRATION.md](./docs/WIDGET-INTEGRATION.md) for installing and controlling the
-  reusable browser widget;
 - [docs/BUSINESS-SEMANTICS.md](./docs/BUSINESS-SEMANTICS.md) for operation outcomes;
 - [docs/SEEDED-SCENARIOS.md](./docs/SEEDED-SCENARIOS.md) for the seed data catalogue.
-- [docs/IMPLEMENTATION-PLAN.md](./docs/IMPLEMENTATION-PLAN.md) for task status, verification gates,
-  and safe instructions for continuing the implementation.
 
 ## How the webchat works
-
-![Current webchat architecture](./docs/diagrams/webchat-system-architecture.svg)
 
 ```text
 Browser widget
     │ restricted-origin JSON + HttpOnly conversation cookie
     ▼
-Webchat service ──► OpenAI Responses API
+Webchat service ──► hosted planner call
+                └─► compulsory independent reviewer call
     │
     ├──► SQLite conversation/workflow state
     └──► Dealership platform (authoritative reads and confirmed writes)
 ```
 
-The language model may request platform reads or prepare a workflow draft. It cannot call the
-confirmation executor. Application code validates the draft, waits for the user to press Confirm,
-persists an idempotency key, and only then sends the protected dealership request.
+Semantic retrieval supplies relevant definitions from one unified application/MCP tool catalogue
+plus evidence generated from the product and business documents. The hosted model proposes concrete
+tool calls. A separate stateless reviewer request accepts, corrects, clarifies, or rejects the
+proposal before deterministic policy and execution. Neither request can call the confirmation
+executor. Application code validates the draft, waits for the user to press Confirm, persists an
+idempotency key, and only then sends the protected dealership request.
 
 Workshop booking lookup is separate from ordinary chat: reference, surname, registration, and
 phone are sent directly to a deterministic endpoint and are not stored in the transcript, model
@@ -88,19 +84,22 @@ input, draft, or logs.
 
 | Variable | Purpose | Local default |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | Server-side Responses API credential | Empty; uses fake provider |
-| `OPENAI_MODEL` | Configurable model ID | `gpt-5-mini` |
-| `LLM_PROVIDER` | Hosted provider mode (`openai` or `azure`) | `openai` |
-| `AZURE_OPENAI_ENDPOINT` | Azure/Foundry OpenAI endpoint | Empty |
-| `AZURE_OPENAI_DEPLOYMENT` | Azure deployment name | Empty |
-| `AZURE_OPENAI_API_KEY` | Azure server-side credential | Empty |
+| `LLM_PROVIDER_URL` | Responses-compatible provider base URL | Empty; uses fake provider locally |
+| `LLM_API_KEY` | Shared server-side credential for both semantic calls | Empty |
+| `LLM_MODEL` | Provider model ID used by both independent semantic calls | Empty; required with hosted provider |
+| `LLM_TURN_TIMEOUT_SECONDS` | Complete planner/reviewer iteration budget | `45` |
+| `MCP_SERVERS_JSON` | Optional JSON array of Streamable HTTP MCP server configurations | Empty |
 | `NORTHSTAR_API_KEY` | Protected dealership-operation key | Local development value |
 | `NORTHSTAR_BASE_URL` | Internal dealership API URL | `http://dealership-platform:4010` |
+| `WEBCHAT_PORT` | Host port exposing the webchat service | `4020` |
 | `WEBCHAT_DATABASE_PATH` | Conversation SQLite path | `/data/webchat.sqlite3` |
 | `WEBCHAT_COOKIE_SECURE` | Adds Secure to the chat cookie | `false` for local HTTP |
 | `WEBCHAT_ALLOWED_ORIGIN` | Accepted browser origin for writes | `http://localhost:4173` |
 | `WEBCHAT_RETENTION_DAYS` | Anonymous conversation retention | `30` |
-| `SEMANTIC_PLAN_POLICY_MODE` | Semantic-plan policy: `off`, `observe`, or `enforce`; legacy `GENERAL_RESPONSE_GATE_MODE` remains accepted | `enforce` in Compose |
+| `WEBCHAT_REQUESTS_PER_MINUTE` | Per-client webchat API request ceiling | `60` |
+| `WEBCHAT_DAILY_TURN_LIMIT` | Global UTC-day turn ceiling (`0` disables it) | `0` |
+| `WEBCHAT_MAX_CONCURRENT_TURNS` | Concurrent AI-backed turn ceiling | `8` |
+| `WEBCHAT_TRUST_PROXY_HEADERS` | Trust gateway-provided client addresses | `false` |
 | `LOG_LEVEL` | Structured server log level | `INFO` |
 
 ## Tests
@@ -112,7 +111,7 @@ docker build --target test -t northstar-webchat-test ./webchat-service
 docker run --rm northstar-webchat-test
 ```
 
-The current Python suite contains 335 tests. Run lint and all widget-module syntax checks:
+Run lint and all widget-module syntax checks as well:
 
 ```bash
 docker run --rm northstar-webchat-test ruff check webchat tests

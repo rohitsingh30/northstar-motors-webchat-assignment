@@ -8,8 +8,11 @@ version = "0.1.0"
 description = "Server-side AI webchat for Northstar Motors"
 requires-python = ">=3.12"
 dependencies = [
+  "fastembed>=0.8,<0.9",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
+  "jsonschema>=4.25,<5",
+  "mcp>=2,<3",
   "pydantic-settings>=2.10,<3",
   "uvicorn>=0.35,<1",
 ]
@@ -27,6 +30,7 @@ where = ["."]
 [tool.setuptools.package-data]
 "webchat.persistence" = ["migrations/*.sql"]
 "webchat" = [
+  "orchestration/retrieval/*.json",
   "widget/*.js",
   "widget/*.css",
   "widget/core/*.js",

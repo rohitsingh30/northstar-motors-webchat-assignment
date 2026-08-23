@@ -1,0 +1,194 @@
+[
+  {
+    "id": "product.overview",
+    "title": "Overview",
+    "text": "# Northstar Motors AI Webchat",
+    "source": "PRODUCT-BRIEF.md#Overview",
+    "audience": "planner"
+  },
+  {
+    "id": "product.product_goal",
+    "title": "Product goal",
+    "text": "Build an AI webchat for the Northstar Motors website. It should help customers find relevant vehicles, get accurate dealership information, and complete common sales and service tasks in a natural conversation. The dealership platform provides access to the existing inventory, sales, workshop, and contact systems. The assistant should provide a helpful and natural conversational experience for Northstar Motors customers.",
+    "source": "PRODUCT-BRIEF.md#Product goal",
+    "audience": "planner"
+  },
+  {
+    "id": "product.core_experience",
+    "title": "Core experience",
+    "text": "The webchat should: be available throughout the website without obscuring important page content; work well on desktop and mobile screen sizes; make its open, closed, loading, unread, unavailable, and error states clear; support normal multi-turn conversation, including sending, scrolling, and reviewing prior messages; preserve a customer's conversation when the page is refreshed; understand relevant context from the page where the conversation begins; show progress while a response or business operation is in flight; make generated links, vehicle results, choices, and confirmations easy to use; be usable with a keyboard and assistive technology; recover gracefully from failed or interrupted requests.",
+    "source": "PRODUCT-BRIEF.md#Core experience",
+    "audience": "planner"
+  },
+  {
+    "id": "product.vehicle_discovery",
+    "title": "Vehicle discovery",
+    "text": "Customers should be able to: search stock using natural descriptions, preferences, and constraints; refine or change requirements during the conversation; compare relevant vehicles; view the important details needed to decide what to do next; follow a result to the corresponding vehicle on the website; understand whether a vehicle is available, reserved, or sold; discover published new-car offers without inventing prices or terms.",
+    "source": "PRODUCT-BRIEF.md#Vehicle discovery",
+    "audience": "planner"
+  },
+  {
+    "id": "product.sales_support",
+    "title": "Sales support",
+    "text": "Customers should be able to: ask whether a vehicle is available; make a general, availability, finance, or part-exchange sales enquiry; find suitable test-drive availability and make a confirmed booking; register interest when a vehicle is currently reserved; request a sales callback with useful timing and context;",
+    "source": "PRODUCT-BRIEF.md#Sales support",
+    "audience": "planner"
+  },
+  {
+    "id": "product.workshop_support",
+    "title": "Workshop support",
+    "text": "Customers should be able to: discover supported service types and suitable workshop locations; ask whether a named service is supported and receive a clear matched, ambiguous, or unavailable answer based on the current service catalogue; make a new workshop booking; amend an existing workshop booking; cancel an existing workshop booking; retrieve the details and status of an existing workshop booking after verifying the customer's identity.",
+    "source": "PRODUCT-BRIEF.md#Workshop support",
+    "audience": "planner"
+  },
+  {
+    "id": "product.contact_and_dealership_information",
+    "title": "Contact and dealership information",
+    "text": "Customers should be able to: find dealership addresses, contact details, departments, and opening hours; understand holiday opening-hour exceptions; leave a message for an appropriate dealership department; request a callback; obtain an indicative part-exchange estimate with the applicable qualification; receive accurate finance, privacy, and part-exchange notices when relevant.",
+    "source": "PRODUCT-BRIEF.md#Contact and dealership information",
+    "audience": "planner"
+  },
+  {
+    "id": "product.technical_scope",
+    "title": "Technical scope",
+    "text": "Implement the webchat as a complete application, including its customer interface, server-side logic, persistent conversation state, LLM configuration, dealership-platform integration, error handling, and operational logging. The product should handle customer information and dealership operations securely and responsibly. Do not add a pre-built webchat product or an existing webchat implementation. General-purpose frameworks and libraries may be used. The webchat may use an LLM provider but must not require any other hosted service.",
+    "source": "PRODUCT-BRIEF.md#Technical scope",
+    "audience": "planner"
+  },
+  {
+    "id": "product.running_the_product",
+    "title": "Running the product",
+    "text": "The product must run from a clean checkout. The repository must include: concise setup and start instructions; the required environment-variable names without committing secret values; any database setup or migration steps; a short description of important product decisions and known limitations; automated checks for the most important behaviour. The webchat and dealership services must run concurrently on their documented ports. Do not change the dealership platform's behaviour or seeded data.",
+    "source": "PRODUCT-BRIEF.md#Running the product",
+    "audience": "planner"
+  },
+  {
+    "id": "product.local_dealership_services",
+    "title": "Local dealership services",
+    "text": "Run the dealership services from this directory: Vehicle website: http://localhost:4173 Dealership Platform API: http://localhost:4010 API documentation: http://localhost:4010/docs Dealership Systems Console: http://localhost:4010/admin The website is editable and is the host site for the webchat. The Systems Console shows records received by the dealership platform and recent API activity. Read docs/INTEGRATION-GUIDE.md before integrating with the local platform.",
+    "source": "PRODUCT-BRIEF.md#Local dealership services",
+    "audience": "planner"
+  },
+  {
+    "id": "business.overview",
+    "title": "Overview",
+    "text": "# Dealership platform business semantics This document defines what each platform response means. The OpenAPI contract defines request and response shape.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Overview",
+    "audience": "planner"
+  },
+  {
+    "id": "business.general_rules",
+    "title": "General rules",
+    "text": "All money values are integer pence in GBP. All timestamps are UTC ISO 8601 values. A write response includes a stable id, customer-facing reference, status, and createdAt. A successful HTTP response confirms only the status stated in its body. Structured errors include code, message, fieldErrors, and retryable. Public catalogue and reference reads do not require authentication. Saved customer-record reads and all writes require X-API-Key. An Idempotency-Key is mandatory when claiming a test-drive or workshop slot and recommended for every other write. Repeating the same operation with the same key and body returns the original record with idempotentReplay: true. Reusing a key with a different body returns IDEMPOTENCY_CONFLICT.",
+    "source": "docs/BUSINESS-SEMANTICS.md#General rules",
+    "audience": "planner"
+  },
+  {
+    "id": "business.vehicle_availability",
+    "title": "Vehicle availability",
+    "text": "available Sales enquiries are accepted. A test drive can be booked when an available slot exists for the vehicle. Registering interest is rejected because the vehicle is not reserved. reserved Sales enquiries are accepted. Test-drive booking is rejected with VEHICLE_RESERVED. Interest can be registered with status registered. sold A sales enquiry can still be accepted. Test-drive booking is rejected with VEHICLE_UNAVAILABLE. Registering interest is rejected because the vehicle is not reserved. Availability may change between a search and an operation.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Vehicle availability",
+    "audience": "planner"
+  },
+  {
+    "id": "business.sales_enquiry",
+    "title": "Sales enquiry",
+    "text": "An accepted enquiry has status received. This means the details were saved for the dealership; it does not promise a response time, finance approval, or vehicle availability.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Sales enquiry",
+    "audience": "planner"
+  },
+  {
+    "id": "business.test_drive_booking",
+    "title": "Test-drive booking",
+    "text": "A created booking has status confirmed. A booking is confirmed only when both the vehicle and slot remain available. If another request claims the slot first, the platform returns SLOT_UNAVAILABLE. No booking is created.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Test-drive booking",
+    "audience": "planner"
+  },
+  {
+    "id": "business.vehicle_interest",
+    "title": "Vehicle interest",
+    "text": "A created record has status registered. It records interest in a currently reserved vehicle. It does not create a queue position or guarantee that the vehicle will become available.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Vehicle interest",
+    "audience": "planner"
+  },
+  {
+    "id": "business.callback_request",
+    "title": "Callback request",
+    "text": "A created callback has status requested. This means the dealership received the request; it does not guarantee an exact callback time.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Callback request",
+    "audience": "planner"
+  },
+  {
+    "id": "business.part_exchange_valuation",
+    "title": "Part-exchange valuation",
+    "text": "A created valuation has status estimated and an estimateLowPence to estimateHighPence range. The estimate is indicative and remains subject to inspection, provenance checks, and market conditions.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Part-exchange valuation",
+    "audience": "planner"
+  },
+  {
+    "id": "business.workshop_operations",
+    "title": "Workshop operations",
+    "text": "The published service-type list is the current workshop catalogue. A service absent from that list must not be represented as supported. Similar customer wording may be resolved to a unique published service, while ambiguous wording requires a choice rather than an invented match.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Workshop operations",
+    "audience": "planner"
+  },
+  {
+    "id": "business.workshop_booking",
+    "title": "Workshop booking",
+    "text": "A created booking has status confirmed and the selected slot becomes unavailable. An amendment returns the complete updated booking. A successful move releases the old slot and reserves the new one. If the new slot has already been claimed, the platform returns SLOT_UNAVAILABLE and the booking remains unchanged. A cancellation changes the booking status to cancelled, records cancelledAt, and releases the slot. Repeating the cancellation returns the already-cancelled booking. An existing booking can be retrieved by matching its reference, customer surname, vehicle registration, and phone number. All four values must match. A successful lookup includes the appointment time, service name, and dealership details. A mismatch returns BOOKING_NOT_FOUND without identifying which value was incorrect. The Bolton workshop has no available slots during the first seven seeded days. This is valid business availability, not a platform failure.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Workshop booking",
+    "audience": "planner"
+  },
+  {
+    "id": "business.messages",
+    "title": "Messages",
+    "text": "A saved dealership message has status received. It confirms that the chosen department can inspect the message; it does not confirm that a reply has been sent.",
+    "source": "docs/BUSINESS-SEMANTICS.md#Messages",
+    "audience": "planner"
+  },
+  {
+    "id": "business.error_handling",
+    "title": "Error handling",
+    "text": "Common error codes:",
+    "source": "docs/BUSINESS-SEMANTICS.md#Error handling",
+    "audience": "planner"
+  },
+  {
+    "id": "customer.overview",
+    "title": "Overview",
+    "text": "# Northstar customer knowledge This document contains reviewed customer-facing explanations that are not dynamic dealership platform records. Dynamic prices, stock, services, locations, hours, offers, slots, and workflow outcomes must always come from their live tools.",
+    "source": "docs/CUSTOMER-KNOWLEDGE.md#Overview",
+    "audience": "planner"
+  },
+  {
+    "id": "customer.pch",
+    "title": "PCH",
+    "text": "PCH means Personal Contract Hire. It is a vehicle lease: the customer normally pays an initial rental and fixed monthly rentals for an agreed term and mileage, then returns the vehicle. The customer does not own the vehicle. Terms and availability vary by published offer, and finance is subject to status.",
+    "source": "docs/CUSTOMER-KNOWLEDGE.md#PCH",
+    "audience": "customer"
+  },
+  {
+    "id": "customer.pcp",
+    "title": "PCP",
+    "text": "PCP means Personal Contract Purchase. It normally uses a deposit and fixed monthly payments, with an optional final payment if the customer wants to keep the vehicle. Terms vary by published offer, and finance is subject to status.",
+    "source": "docs/CUSTOMER-KNOWLEDGE.md#PCP",
+    "audience": "customer"
+  },
+  {
+    "id": "customer.vehicle_pickup_and_collection_policy",
+    "title": "Vehicle pickup and collection policy",
+    "text": "I don't have confirmed Northstar information about vehicle collection or home pickup. Would you like me to help you contact a dealership?",
+    "source": "docs/CUSTOMER-KNOWLEDGE.md#Vehicle pickup and collection policy",
+    "audience": "customer",
+    "follow_up_action": {
+      "type": "show_dealership_contact_options"
+    }
+  },
+  {
+    "id": "customer.part_exchange_estimates",
+    "title": "Part-exchange estimates",
+    "text": "Northstar's online part-exchange estimate uses the vehicle registration, current mileage, and customer-selected condition to produce an indicative valuation range. It is not a guaranteed purchase price and remains subject to physical inspection, provenance checks, and current market conditions.",
+    "source": "docs/CUSTOMER-KNOWLEDGE.md#Part-exchange estimates",
+    "audience": "customer"
+  }
+]

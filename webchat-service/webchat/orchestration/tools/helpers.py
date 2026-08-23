@@ -48,7 +48,5 @@ def dealership_in_town(dealerships: list[dict], town: str) -> dict | None:
 
 def dealership_towns(dealerships: list[dict]) -> str:
     return ", ".join(
-        str(dealership.get("town"))
-        for dealership in dealerships
-        if dealership.get("town")
+        str(dealership.get("town")) for dealership in dealerships if dealership.get("town")
     )

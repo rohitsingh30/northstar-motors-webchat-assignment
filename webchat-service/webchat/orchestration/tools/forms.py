@@ -49,9 +49,7 @@ class FormToolHandler:
         )
 
     async def _part_exchange_form(self, arguments: dict[str, Any]) -> ToolResult:
-        known = PartExchangeEstimateForm.model_validate(arguments).model_dump(
-            exclude_none=True
-        )
+        known = PartExchangeEstimateForm.model_validate(arguments).model_dump(exclude_none=True)
         return ToolResult(
             "Enter the remaining vehicle details in the form below.",
             "part_exchange_estimate_form",

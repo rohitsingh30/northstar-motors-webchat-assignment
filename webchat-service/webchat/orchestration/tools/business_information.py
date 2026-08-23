@@ -9,54 +9,6 @@ from typing import Any, Literal
 BusinessTopic = Literal["finance", "privacy", "part_exchange", "general"]
 ResolutionOutcome = Literal["matched", "ambiguous", "unavailable"]
 
-_STOP_WORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "at",
-        "be",
-        "by",
-        "can",
-        "do",
-        "does",
-        "for",
-        "from",
-        "had",
-        "has",
-        "have",
-        "how",
-        "i",
-        "in",
-        "is",
-        "it",
-        "me",
-        "my",
-        "of",
-        "on",
-        "or",
-        "our",
-        "that",
-        "the",
-        "this",
-        "to",
-        "was",
-        "we",
-        "what",
-        "when",
-        "where",
-        "which",
-        "who",
-        "will",
-        "with",
-        "would",
-        "you",
-        "your",
-    }
-)
-
 
 @dataclass(frozen=True)
 class FactSpec:
@@ -163,9 +115,7 @@ class BusinessInformationResolver:
             value = _path_value(data, spec.path)
             if value in (None, ""):
                 continue
-            document_terms = _tokens(
-                " ".join((spec.label, spec.description, str(value)))
-            )
+            document_terms = _tokens(" ".join((spec.label, spec.description, str(value))))
             score = len(query_terms.intersection(document_terms))
             if score:
                 candidates.append(
@@ -184,9 +134,7 @@ class BusinessInformationResolver:
             return BusinessInformationResolution("unavailable", topic)
 
         highest_score = max(score for score, _ in candidates)
-        strongest = tuple(
-            fact for score, fact in candidates if score == highest_score
-        )
+        strongest = tuple(fact for score, fact in candidates if score == highest_score)
         strongest_topics = {fact.topic for fact in strongest}
         if topic == "general" and len(strongest_topics) > 1:
             return BusinessInformationResolution("ambiguous", topic, strongest)
@@ -194,8 +142,8 @@ class BusinessInformationResolver:
 
 
 def _tokens(value: str) -> frozenset[str]:
-    return frozenset(re.findall(r"[a-z0-9]+", value.casefold())).difference(
-        _STOP_WORDS
+    return frozenset(
+        token for token in re.findall(r"[a-z0-9]+", value.casefold()) if len(token) >= 3
     )
 
 

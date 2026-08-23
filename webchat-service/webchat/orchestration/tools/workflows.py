@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Protocol
 
+from webchat.orchestration.tools.helpers import dealership_in_town
 from webchat.orchestration.tools.result import ToolResult
 
 
@@ -33,6 +34,12 @@ class WorkflowToolHandler:
         "prepare_dealership_message": "dealership_message",
         "prepare_part_exchange": "part_exchange",
     }
+    FORM_TO_KIND: ClassVar[dict[str, str]] = {
+        "request_offer_enquiry_form": "sales_enquiry",
+    }
+    DEALERSHIP_FORM_KINDS: ClassVar[frozenset[str]] = frozenset(
+        {"part_exchange", "callback", "sales_enquiry", "dealership_message"}
+    )
 
     def __init__(
         self,
@@ -43,16 +50,35 @@ class WorkflowToolHandler:
         self.workflows = workflows
 
     def supports(self, name: str) -> bool:
-        return name in self.TOOL_TO_KIND
+        return name in self.TOOL_TO_KIND or name in self.FORM_TO_KIND
 
     async def execute(
         self, name: str, arguments: dict[str, Any], conversation_id: str | None
     ) -> ToolResult:
         if self.workflows is None or conversation_id is None:
             raise ValueError("Workflow tools require a conversation")
-        draft = self.workflows.prepare(
-            conversation_id, self.TOOL_TO_KIND[name], arguments
-        )
+        kind = self.TOOL_TO_KIND.get(name) or self.FORM_TO_KIND[name]
+        dealerships: list[dict[str, Any]] | None = None
+        prepared_arguments = dict(arguments)
+        if kind in self.DEALERSHIP_FORM_KINDS:
+            response = await self.dealership.list_dealerships()
+            dealerships = list(response.get("items", []))
+            prepared_arguments = self._resolve_dealership(prepared_arguments, dealerships)
+        if name in self.FORM_TO_KIND:
+            payload = {
+                "version": 1,
+                "kind": kind,
+                "status": "collecting",
+                "summary": prepared_arguments,
+            }
+            await self._enrich(payload, kind, prepared_arguments, dealerships)
+            return ToolResult(
+                "Complete the sales enquiry form.",
+                "draft",
+                payload,
+                payload,
+            )
+        draft = self.workflows.prepare(conversation_id, kind, prepared_arguments)
         payload = {
             "version": 1,
             "draftId": draft.id,
@@ -61,7 +87,7 @@ class WorkflowToolHandler:
             "missingFields": draft.missing_fields,
             "summary": draft.summary,
         }
-        await self._enrich(payload, draft.kind, draft.summary)
+        await self._enrich(payload, draft.kind, draft.summary, dealerships)
         return ToolResult(
             "Please review and confirm these details."
             if draft.status == "awaiting_confirmation"
@@ -71,7 +97,33 @@ class WorkflowToolHandler:
             payload,
         )
 
-    async def _enrich(self, payload: dict, kind: str, summary: dict) -> None:
+    @staticmethod
+    def _resolve_dealership(
+        arguments: dict[str, Any], dealerships: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Resolve a semantic town and reject stale IDs before persisting a draft."""
+        resolved = dict(arguments)
+        town = resolved.pop("dealershipTown", None)
+        if town:
+            match = dealership_in_town(dealerships, str(town))
+            if match and match.get("id"):
+                resolved["dealershipId"] = match["id"]
+            else:
+                resolved.pop("dealershipId", None)
+            return resolved
+
+        live_ids = {str(item["id"]) for item in dealerships if item.get("id")}
+        if resolved.get("dealershipId") not in live_ids:
+            resolved.pop("dealershipId", None)
+        return resolved
+
+    async def _enrich(
+        self,
+        payload: dict,
+        kind: str,
+        summary: dict,
+        dealerships: list[dict[str, Any]] | None = None,
+    ) -> None:
         business = await self.dealership.get_business_information()
         payload["privacyContact"] = business.get("privacyContact")
         if kind in {"vehicle_interest", "sales_enquiry"} and summary.get("vehicleId"):
@@ -92,18 +144,14 @@ class WorkflowToolHandler:
                     "dealershipTown",
                 )
             }
-        if kind in {
-            "part_exchange",
-            "callback",
-            "sales_enquiry",
-            "dealership_message",
-        }:
-            dealerships = await self.dealership.list_dealerships()
+        if kind in self.DEALERSHIP_FORM_KINDS:
+            if dealerships is None:
+                dealerships = list((await self.dealership.list_dealerships()).get("items", []))
             payload["dealerships"] = [
                 {
                     "id": item.get("id"),
                     "name": item.get("name"),
                     "town": item.get("town"),
                 }
-                for item in dealerships.get("items", [])
+                for item in dealerships
             ]

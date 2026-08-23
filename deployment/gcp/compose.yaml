@@ -1,0 +1,94 @@
+name: northstar-review
+
+services:
+  dealership-platform:
+    build:
+      context: ../../dealership-platform
+    restart: unless-stopped
+    environment:
+      NORTHSTAR_API_KEY: ${NORTHSTAR_API_KEY:?NORTHSTAR_API_KEY is required}
+      NORTHSTAR_ADMIN_KEY: ${NORTHSTAR_ADMIN_KEY:?NORTHSTAR_ADMIN_KEY is required}
+      NORTHSTAR_DATA_PATH: /data/northstar.sqlite3
+      NORTHSTAR_PORT: "4010"
+    volumes:
+      - northstar-platform-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4010/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  webchat-service:
+    build:
+      context: ../../webchat-service
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      LLM_PROVIDER_URL: ${LLM_PROVIDER_URL:?LLM_PROVIDER_URL is required}
+      LLM_API_KEY: ${LLM_API_KEY:?LLM_API_KEY is required}
+      LLM_MODEL: ${LLM_MODEL:?LLM_MODEL is required}
+      LLM_TURN_TIMEOUT_SECONDS: ${LLM_TURN_TIMEOUT_SECONDS:-45}
+      NORTHSTAR_API_KEY: ${NORTHSTAR_API_KEY:?NORTHSTAR_API_KEY is required}
+      NORTHSTAR_BASE_URL: http://dealership-platform:4010
+      WEBCHAT_DATABASE_PATH: /data/webchat.sqlite3
+      WEBCHAT_COOKIE_SECURE: "true"
+      WEBCHAT_ALLOWED_ORIGIN: ${REVIEWER_ORIGIN:?REVIEWER_ORIGIN is required}
+      WEBCHAT_RETENTION_DAYS: ${WEBCHAT_RETENTION_DAYS:-7}
+      WEBCHAT_REQUESTS_PER_MINUTE: ${WEBCHAT_REQUESTS_PER_MINUTE:-30}
+      WEBCHAT_DAILY_TURN_LIMIT: ${WEBCHAT_DAILY_TURN_LIMIT:-250}
+      WEBCHAT_MAX_CONCURRENT_TURNS: ${WEBCHAT_MAX_CONCURRENT_TURNS:-3}
+      WEBCHAT_TRUST_PROXY_HEADERS: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - northstar-webchat-data:/data
+    depends_on:
+      dealership-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4020/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  dealership-website:
+    build:
+      context: ../../dealership-website
+    restart: unless-stopped
+    depends_on:
+      dealership-platform:
+        condition: service_healthy
+
+  gateway:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      dealership-platform:
+        condition: service_healthy
+      webchat-service:
+        condition: service_healthy
+      dealership-website:
+        condition: service_started
+
+  cloudflared-named:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["named-tunnel"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-missing}
+    depends_on:
+      gateway:
+        condition: service_started
+
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["quick-tunnel"]
+    command: tunnel --no-autoupdate --url http://gateway:8080
+    depends_on:
+      gateway:
+        condition: service_started
+
+volumes:
+  northstar-platform-data:
+  northstar-webchat-data:
