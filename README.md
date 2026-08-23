@@ -1,6 +1,6 @@
 # Northstar Motors AI Webchat
 
-Website - https://gtk-slow-eval-ourselves.trycloudflare.com/
+Website - [https://gtk-slow-eval-ourselves.trycloudflare.com/](https://scheduling-production-modifications-producers.trycloudflare.com/)
 
 This repository contains the Northstar Motors website, supplied local dealership platform, and a
 server-side AI webchat. The webchat keeps protected dealership operations and credentials out of
