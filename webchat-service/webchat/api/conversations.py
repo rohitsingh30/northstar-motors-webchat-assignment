@@ -4,9 +4,9 @@ import json
 import secrets
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse
 
 from webchat.integrations.dealership import DealershipError
+from webchat.orchestration.planning.ontology import GoalKey, Goals, workflow_state
 
 from .models import (
     BookingLookupRequest,
@@ -26,62 +26,11 @@ from .models import (
     WorkshopExistingActionRequest,
     WorkshopOptionsRequest,
 )
+from .restoration import message_view as _message_view
+from .restoration import receipt_text as _receipt_text
 
 router = APIRouter(prefix="/api/chat/v1")
 COOKIE = "northstar_chat"
-
-
-def _message_view(message) -> dict:
-    view = {
-        "id": message.id,
-        "role": message.role,
-        "text": message.text,
-        "createdAt": message.created_at,
-    }
-    if message.view_type:
-        view["viewType"] = message.view_type
-        view["view"] = json.loads(message.view_payload_json)
-    return view
-
-
-def _restorable_messages(messages) -> list:
-    """Hide only pending cards completed by a later receipt; preserve newer repeat requests."""
-    keep = [True] * len(messages)
-    pending_by_kind: dict[str, list[int]] = {}
-    for index, message in enumerate(messages):
-        if message.role != "assistant" or message.view_type not in {
-            "draft",
-            "confirmation",
-            "receipt",
-        }:
-            continue
-        try:
-            payload = json.loads(message.view_payload_json or "{}")
-        except (TypeError, ValueError):
-            continue
-        kind = payload.get("kind")
-        if not isinstance(kind, str) or not kind:
-            continue
-        if message.view_type in {"draft", "confirmation"}:
-            pending_by_kind.setdefault(kind, []).append(index)
-            continue
-        for pending_index in pending_by_kind.pop(kind, []):
-            keep[pending_index] = False
-    return [message for index, message in enumerate(messages) if keep[index]]
-
-
-def _receipt_text(kind: str) -> str:
-    return {
-        "sales_enquiry": "Your sales enquiry has been submitted.",
-        "test_drive": "Your test drive is confirmed.",
-        "vehicle_interest": "Your interest has been registered.",
-        "callback": "Your callback request has been submitted.",
-        "workshop_booking": "Your workshop appointment is confirmed.",
-        "workshop_amend": "Your workshop booking has been updated.",
-        "workshop_cancel": "Your workshop booking has been cancelled.",
-        "dealership_message": "Your dealership message has been submitted.",
-        "part_exchange": "Your part-exchange request has been submitted.",
-    }.get(kind, "Your request is complete.")
 
 
 def _authorize(request: Request, conversation_id: str) -> None:
@@ -90,21 +39,7 @@ def _authorize(request: Request, conversation_id: str) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
 
-def _platform_problem(error: DealershipError) -> JSONResponse:
-    return JSONResponse(
-        status_code=error.status,
-        content={
-            "error": {
-                "code": error.code,
-                "message": str(error),
-                "retryable": error.retryable,
-                "fieldErrors": error.field_errors,
-            }
-        },
-    )
-
-
-def _workshop_state(intent: str, stage: str, booking: dict | None = None) -> dict:
+def _workshop_state(key: GoalKey, stage: str, booking: dict | None = None) -> dict:
     booking = booking or {}
     entities = {}
     if booking.get("serviceTypeId"):
@@ -116,14 +51,9 @@ def _workshop_state(intent: str, stage: str, booking: dict | None = None) -> dic
         if booking.get("dealershipId")
         else {}
     )
-    return {
-        "version": 1,
-        "domain": "workshop",
-        "intent": intent,
-        "stage": stage,
-        "entities": entities,
-        "constraints": constraints,
-    }
+    return workflow_state(
+        key, stage, entities=entities, constraints=constraints
+    )
 
 
 def _persist_receipt_once(
@@ -177,7 +107,9 @@ async def _prepare_existing_workshop_action(
     request.app.state.conversations.update_workflow_state(
         conversation_id,
         _workshop_state(
-            "workshop_booking_change" if mode == "amend" else "workshop_booking_cancel",
+            Goals.WORKSHOP_CHANGE_BOOKING
+            if mode == "amend"
+            else Goals.WORKSHOP_CANCEL_BOOKING,
             stage,
             {
                 "serviceTypeName": summary.get("service"),
@@ -213,14 +145,21 @@ async def _workshop_amendment_options_result(
     )
 
 
+async def _tool_view(
+    request: Request, conversation_id: str, tool_name: str, arguments: dict
+) -> dict:
+    """Execute a validated application tool and expose only its public view contract."""
+    result = await request.app.state.tools.execute(
+        tool_name, arguments, conversation_id
+    )
+    return {"viewType": result.view_type, "view": result.view_payload}
+
+
 @router.get("/vehicle-images/{vehicle_id}")
 async def vehicle_image(vehicle_id: str, request: Request) -> Response:
     if len(vehicle_id) != 7 or not vehicle_id.startswith("veh-") or not vehicle_id[4:].isdigit():
         raise HTTPException(status_code=404, detail="Vehicle image not found")
-    try:
-        content, media_type = await request.app.state.dealership.get_vehicle_image(vehicle_id)
-    except DealershipError as error:
-        return _platform_problem(error)
+    content, media_type = await request.app.state.dealership.get_vehicle_image(vehicle_id)
     return Response(content=content, media_type=media_type)
 
 
@@ -274,78 +213,14 @@ async def list_conversations(request: Request) -> dict:
 @router.get("/conversations/{conversation_id}")
 async def restore_conversation(conversation_id: str, request: Request) -> dict:
     _authorize(request, conversation_id)
-    messages = request.app.state.messages.list(conversation_id)
-    draft_ids = []
-    for message in messages:
-        if message.view_type not in {"draft", "confirmation"}:
-            continue
-        try:
-            payload = json.loads(message.view_payload_json or "{}")
-        except (TypeError, ValueError):
-            continue
-        if isinstance(payload.get("draftId"), str):
-            draft_ids.append(payload["draftId"])
-    statuses = request.app.state.workflow_repository.statuses(conversation_id, draft_ids)
-    active_messages = []
-    for message in messages:
-        if message.view_type not in {"draft", "confirmation"}:
-            active_messages.append(message)
-            continue
-        try:
-            payload = json.loads(message.view_payload_json or "{}")
-        except (TypeError, ValueError):
-            active_messages.append(message)
-            continue
-        draft_id = payload.get("draftId")
-        if (
-            not isinstance(draft_id, str)
-            or draft_id not in statuses
-            or statuses[draft_id] in {"collecting", "awaiting_confirmation"}
-        ):
-            active_messages.append(message)
-    messages = active_messages
-    messages = _restorable_messages(messages)
-    restored = [_message_view(message) for message in messages]
-    receipt_identities = {
-        (
-            item.get("view", {}).get("kind"),
-            item.get("view", {}).get("reference"),
-            item.get("view", {}).get("status"),
-        )
-        for item in restored
-        if item.get("viewType") == "receipt"
-    }
-    for completed in request.app.state.workflow_repository.succeeded_receipts(conversation_id):
-        receipt = completed["receipt"]
-        identity = (receipt.get("kind"), receipt.get("reference"), receipt.get("status"))
-        if identity in receipt_identities:
-            continue
-        synthetic = {
-            "id": f"workflow-{completed['draftId']}",
-            "role": "assistant",
-            "text": _receipt_text(str(receipt.get("kind") or "")),
-            "createdAt": completed["createdAt"],
-            "viewType": "receipt",
-            "view": receipt,
-        }
-        insert_at = len(restored)
-        for index, item in enumerate(restored):
-            if (
-                item.get("viewType") in {"draft", "confirmation"}
-                and item.get("view", {}).get("kind") == receipt.get("kind")
-            ):
-                insert_at = index - 1 if index and restored[index - 1].get("role") == "user" else index
-                break
-        restored.insert(insert_at, synthetic)
-        receipt_identities.add(identity)
     return {
         "conversationId": conversation_id,
-        "messages": restored,
+        "messages": request.app.state.restorer.restore(conversation_id),
     }
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_conversation(conversation_id: str, request: Request, response: Response) -> None:
+async def delete_conversation(conversation_id: str, request: Request) -> None:
     _authorize(request, conversation_id)
     request.app.state.conversations.delete(conversation_id)
 
@@ -378,18 +253,16 @@ async def confirm_draft(
         )
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    except DealershipError as error:
-        return _platform_problem(error)
     kind = str(result.get("kind") or "")
     if kind.startswith("workshop_"):
-        intent = {
-            "workshop_booking": "workshop_booking",
-            "workshop_amend": "workshop_booking_change",
-            "workshop_cancel": "workshop_booking_cancel",
-        }.get(kind, "workshop_booking")
+        key = {
+            "workshop_booking": Goals.WORKSHOP_BOOK_SERVICE,
+            "workshop_amend": Goals.WORKSHOP_CHANGE_BOOKING,
+            "workshop_cancel": Goals.WORKSHOP_CANCEL_BOOKING,
+        }.get(kind, Goals.WORKSHOP_BOOK_SERVICE)
         request.app.state.conversations.update_workflow_state(
             conversation_id,
-            _workshop_state(intent, "completed"),
+            _workshop_state(key, "completed"),
         )
     receipt_text = _receipt_text(kind)
     replaced = request.app.state.messages.replace_draft_with_receipt(
@@ -405,21 +278,17 @@ async def test_drive_options(
     conversation_id: str, body: TestDriveOptionsRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "list_test_drive_slots", {"vehicleId": body.vehicleId}, conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
+    result = await request.app.state.tools.execute(
+        "list_test_drive_slots", {"vehicleId": body.vehicleId}, conversation_id
+    )
     request.app.state.conversations.update_workflow_state(
         conversation_id,
         {
-            "version": 1,
-            "domain": "vehicle",
-            "intent": "test_drive",
-            "stage": "choosing_time",
-            "entities": {"vehicleId": body.vehicleId},
-            "constraints": {},
+            **workflow_state(
+                Goals.TEST_DRIVE_BOOK,
+                "choosing_time",
+                entities={"vehicleId": body.vehicleId},
+            ),
             "lastTool": "list_test_drive_slots",
         },
     )
@@ -431,13 +300,9 @@ async def prepare_test_drive_draft(
     conversation_id: str, body: TestDriveDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "prepare_test_drive", body.model_dump(), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request, conversation_id, "prepare_test_drive", body.model_dump()
+    )
 
 
 @router.post("/conversations/{conversation_id}/workshop-options")
@@ -446,12 +311,9 @@ async def workshop_options(
 ) -> dict:
     _authorize(request, conversation_id)
     filters = body.model_dump(exclude_none=True)
-    try:
-        result = await request.app.state.tools.execute(
-            "list_workshop_slots", filters, conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
+    result = await request.app.state.tools.execute(
+        "list_workshop_slots", filters, conversation_id
+    )
     entities = {"serviceTypeId": body.serviceTypeId}
     constraints = {}
     if body.dealershipId:
@@ -459,12 +321,12 @@ async def workshop_options(
     request.app.state.conversations.update_workflow_state(
         conversation_id,
         {
-            "version": 1,
-            "domain": "workshop",
-            "intent": "workshop_booking",
-            "stage": "choosing_time",
-            "entities": entities,
-            "constraints": constraints,
+            **workflow_state(
+                Goals.WORKSHOP_BOOK_SERVICE,
+                "choosing_time",
+                entities=entities,
+                constraints=constraints,
+            ),
             "lastTool": "list_workshop_slots",
         },
     )
@@ -476,13 +338,12 @@ async def prepare_workshop_draft(
     conversation_id: str, body: WorkshopDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "prepare_workshop_booking", body.model_dump(exclude_none=True), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request,
+        conversation_id,
+        "prepare_workshop_booking",
+        body.model_dump(exclude_none=True),
+    )
 
 
 @router.post("/conversations/{conversation_id}/part-exchange-drafts")
@@ -490,13 +351,9 @@ async def prepare_part_exchange_draft(
     conversation_id: str, body: PartExchangeDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "prepare_part_exchange", body.model_dump(), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request, conversation_id, "prepare_part_exchange", body.model_dump()
+    )
 
 
 @router.post("/conversations/{conversation_id}/part-exchange-estimates")
@@ -504,13 +361,9 @@ async def estimate_part_exchange(
     conversation_id: str, body: PartExchangeEstimateRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "estimate_part_exchange", body.model_dump(), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request, conversation_id, "estimate_part_exchange", body.model_dump()
+    )
 
 
 @router.post("/conversations/{conversation_id}/callback-drafts")
@@ -518,13 +371,9 @@ async def prepare_callback_draft(
     conversation_id: str, body: CallbackDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "prepare_callback", body.model_dump(), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request, conversation_id, "prepare_callback", body.model_dump()
+    )
 
 
 @router.post("/conversations/{conversation_id}/sales-enquiry-drafts")
@@ -532,13 +381,12 @@ async def prepare_sales_enquiry_draft(
     conversation_id: str, body: SalesEnquiryDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "prepare_sales_enquiry", body.model_dump(exclude_none=True), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request,
+        conversation_id,
+        "prepare_sales_enquiry",
+        body.model_dump(exclude_none=True),
+    )
 
 
 @router.post("/conversations/{conversation_id}/vehicle-interest-drafts")
@@ -546,13 +394,12 @@ async def prepare_vehicle_interest_draft(
     conversation_id: str, body: VehicleInterestDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "prepare_vehicle_interest", body.model_dump(exclude_none=True), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request,
+        conversation_id,
+        "prepare_vehicle_interest",
+        body.model_dump(exclude_none=True),
+    )
 
 
 @router.post("/conversations/{conversation_id}/dealership-message-drafts")
@@ -560,13 +407,9 @@ async def prepare_dealership_message_draft(
     conversation_id: str, body: DealershipMessageDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.tools.execute(
-            "prepare_dealership_message", body.model_dump(), conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
-    return {"viewType": result.view_type, "view": result.view_payload}
+    return await _tool_view(
+        request, conversation_id, "prepare_dealership_message", body.model_dump()
+    )
 
 
 @router.post("/conversations/{conversation_id}/workshop-amendment-drafts")
@@ -574,60 +417,64 @@ async def prepare_workshop_amendment_draft(
     conversation_id: str, body: WorkshopAmendDraftRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        selected_slot = None
-        if body.slotId:
-            options = await _workshop_amendment_options_result(
-                request, conversation_id
-            )
-            selected_slot = next(
-                (
-                    item
-                    for item in (options.view_payload or {}).get("items", [])
-                    if item.get("id") == body.slotId
-                ),
-                None,
-            )
-            if selected_slot is None:
-                raise DealershipError(
-                    409,
-                    "SLOT_UNAVAILABLE",
-                    "That workshop appointment is no longer available.",
-                )
-        result = await request.app.state.tools.execute(
-            "prepare_workshop_amendment", body.model_dump(exclude_none=True), conversation_id
+    selected_slot = None
+    if body.slotId:
+        options = await _workshop_amendment_options_result(request, conversation_id)
+        selected_slot = next(
+            (
+                item
+                for item in (options.view_payload or {}).get("items", [])
+                if item.get("id") == body.slotId
+            ),
+            None,
         )
-        if selected_slot and result.view_payload:
-            summary = result.view_payload.setdefault("summary", {})
-            summary["newAppointment"] = selected_slot.get("startsAt")
-            summary["newDealership"] = (
-                selected_slot.get("dealershipName")
-                or selected_slot.get("dealershipTown")
+        if selected_slot is None:
+            raise DealershipError(
+                409,
+                "SLOT_UNAVAILABLE",
+                "That workshop appointment is no longer available.",
             )
-    except DealershipError as error:
-        return _platform_problem(error)
+    result = await request.app.state.tools.execute(
+        "prepare_workshop_amendment",
+        body.model_dump(exclude_none=True),
+        conversation_id,
+    )
+    if selected_slot and result.view_payload:
+        summary = result.view_payload.setdefault("summary", {})
+        summary["newAppointment"] = selected_slot.get("startsAt")
+        summary["newDealership"] = (
+            selected_slot.get("dealershipName") or selected_slot.get("dealershipTown")
+        )
     return {"viewType": result.view_type, "view": result.view_payload}
 
 
 @router.post("/conversations/{conversation_id}/workshop-amendment-options")
 async def workshop_amendment_options(conversation_id: str, request: Request) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await _workshop_amendment_options_result(
-            request, conversation_id
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
+    result = await _workshop_amendment_options_result(request, conversation_id)
     return {"viewType": result.view_type, "view": result.view_payload}
 
 
-@router.post("/conversations/{conversation_id}/drafts/{draft_id}/cancel", status_code=204)
-async def cancel_draft(conversation_id: str, draft_id: str, request: Request) -> None:
+@router.post("/conversations/{conversation_id}/drafts/{draft_id}/cancel")
+async def cancel_draft(conversation_id: str, draft_id: str, request: Request) -> dict:
     _authorize(request, conversation_id)
     try:
-        request.app.state.workflow_repository.cancel(conversation_id, draft_id)
+        draft = request.app.state.workflow_repository.cancel(conversation_id, draft_id)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    kind = (
+        "workshop_change_abandoned"
+        if draft.get("kind") in {"workshop_amend", "workshop_cancel"}
+        else "request_cancelled"
+    )
+    result = {"kind": kind, "status": "cancelled"}
+    receipt_text = _receipt_text(kind)
+    replaced = request.app.state.messages.replace_draft_with_receipt(
+        conversation_id, draft_id, receipt_text, result
+    )
+    if not replaced:
+        _persist_receipt_once(request, conversation_id, receipt_text, result)
+    return {"status": "cancelled", "result": result}
 
 
 @router.post("/conversations/{conversation_id}/workshop-booking-lookup")
@@ -635,32 +482,29 @@ async def lookup_booking(
     conversation_id: str, body: BookingLookupRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    try:
-        result = await request.app.state.workflows.lookup_booking(
-            conversation_id, body.model_dump(exclude={"mode"})
+    result = await request.app.state.workflows.lookup_booking(
+        conversation_id, body.model_dump(exclude={"mode"})
+    )
+    booking = result.get("booking", {})
+    if body.mode in {"amend", "cancel"} and booking.get("status") != "confirmed":
+        raise DealershipError(
+            409,
+            "BOOKING_NOT_ACTIVE",
+            "Only a confirmed workshop booking can be changed or cancelled.",
         )
-        booking = result.get("booking", {})
-        if body.mode in {"amend", "cancel"} and booking.get("status") != "confirmed":
-            raise DealershipError(
-                409,
-                "BOOKING_NOT_ACTIVE",
-                "Only a confirmed workshop booking can be changed or cancelled.",
-            )
-        request.app.state.conversations.update_workflow_state(
-            conversation_id,
-            _workshop_state("workshop_booking_lookup", "verified", booking),
+    request.app.state.conversations.update_workflow_state(
+        conversation_id,
+        _workshop_state(Goals.WORKSHOP_FIND_BOOKING, "verified", booking),
+    )
+    if body.mode in {"amend", "cancel"}:
+        return await _prepare_existing_workshop_action(
+            request, conversation_id, body.mode
         )
-        if body.mode in {"amend", "cancel"}:
-            return await _prepare_existing_workshop_action(
-                request, conversation_id, body.mode
-            )
-        return {
-            "text": "Your workshop booking has been verified.",
-            "viewType": "workshop_booking_details",
-            "view": {"version": 1, **booking},
-        }
-    except DealershipError as error:
-        return _platform_problem(error)
+    return {
+        "text": "Your workshop booking has been verified.",
+        "viewType": "workshop_booking_details",
+        "view": {"version": 1, **booking},
+    }
 
 
 @router.post("/conversations/{conversation_id}/workshop-existing-action")
@@ -677,9 +521,4 @@ async def existing_workshop_action(
             status_code=409,
             detail="Only a confirmed workshop booking can be changed or cancelled.",
         )
-    try:
-        return await _prepare_existing_workshop_action(
-            request, conversation_id, body.mode
-        )
-    except DealershipError as error:
-        return _platform_problem(error)
+    return await _prepare_existing_workshop_action(request, conversation_id, body.mode)

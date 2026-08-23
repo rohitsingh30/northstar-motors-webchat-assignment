@@ -1,5 +1,5 @@
 // This module owns the complete browser widget; host applications only load embed.js.
-import { setPageContext } from "./webchat-context.js";
+import { setPageContext } from "./core/context.js";
 import { createWebchat } from "./webchat.js";
 
 const HOST_STYLE_ID = "northstar-chat-host-style";

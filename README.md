@@ -10,7 +10,7 @@ business record is created or changed.
 Requirements:
 
 - Docker with Docker Compose
-- Ports `4010` and `4173` available
+- Ports `4010`, `4020`, and `4173` available
 
 Copy the environment template:
 
@@ -49,8 +49,11 @@ Start with:
 
 - [PRODUCT-BRIEF.md](./PRODUCT-BRIEF.md) for the product requirements;
 - [docs/PRD.md](./docs/PRD.md) for the detailed product requirements and acceptance criteria;
-- [docs/HLD.md](./docs/HLD.md) for the proposed architecture and system design;
-- [docs/LLD.md](./docs/LLD.md) for the component, data, API, workflow, and test design;
+- [docs/HLD.md](./docs/HLD.md) for the current architecture, trust boundaries, and decisions;
+- [docs/LLD.md](./docs/LLD.md) for the current component, data, API, workflow, and test design;
+- [webchat-service/README.md](./webchat-service/README.md) for service operation and the complete
+  module documentation map;
+- [docs/diagrams/README.md](./docs/diagrams/README.md) for architecture images and editable sources;
 - [docs/INTEGRATION-GUIDE.md](./docs/INTEGRATION-GUIDE.md) for API usage;
 - [docs/WIDGET-INTEGRATION.md](./docs/WIDGET-INTEGRATION.md) for installing and controlling the
   reusable browser widget;
@@ -60,6 +63,8 @@ Start with:
   and safe instructions for continuing the implementation.
 
 ## How the webchat works
+
+![Current webchat architecture](./docs/diagrams/webchat-system-architecture.svg)
 
 ```text
 Browser widget
@@ -85,12 +90,17 @@ input, draft, or logs.
 | --- | --- | --- |
 | `OPENAI_API_KEY` | Server-side Responses API credential | Empty; uses fake provider |
 | `OPENAI_MODEL` | Configurable model ID | `gpt-5-mini` |
+| `LLM_PROVIDER` | Hosted provider mode (`openai` or `azure`) | `openai` |
+| `AZURE_OPENAI_ENDPOINT` | Azure/Foundry OpenAI endpoint | Empty |
+| `AZURE_OPENAI_DEPLOYMENT` | Azure deployment name | Empty |
+| `AZURE_OPENAI_API_KEY` | Azure server-side credential | Empty |
 | `NORTHSTAR_API_KEY` | Protected dealership-operation key | Local development value |
 | `NORTHSTAR_BASE_URL` | Internal dealership API URL | `http://dealership-platform:4010` |
 | `WEBCHAT_DATABASE_PATH` | Conversation SQLite path | `/data/webchat.sqlite3` |
 | `WEBCHAT_COOKIE_SECURE` | Adds Secure to the chat cookie | `false` for local HTTP |
 | `WEBCHAT_ALLOWED_ORIGIN` | Accepted browser origin for writes | `http://localhost:4173` |
 | `WEBCHAT_RETENTION_DAYS` | Anonymous conversation retention | `30` |
+| `SEMANTIC_PLAN_POLICY_MODE` | Semantic-plan policy: `off`, `observe`, or `enforce`; legacy `GENERAL_RESPONSE_GATE_MODE` remains accepted | `enforce` in Compose |
 | `LOG_LEVEL` | Structured server log level | `INFO` |
 
 ## Tests
@@ -100,6 +110,16 @@ Build and run the isolated webchat tests:
 ```bash
 docker build --target test -t northstar-webchat-test ./webchat-service
 docker run --rm northstar-webchat-test
+```
+
+The current Python suite contains 335 tests. Run lint and all widget-module syntax checks:
+
+```bash
+docker run --rm northstar-webchat-test ruff check webchat tests
+for file in $(find webchat-service/webchat/widget -name '*.js'); do
+  node --check "$file" || exit 1
+done
+node --test webchat-service/tests/browser/*.mjs
 ```
 
 Run the supplied dealership-platform tests:
@@ -119,8 +139,8 @@ git diff --check
 ## Important boundaries
 
 - `dealership-platform/` is supplied and must not be changed.
-- The browser stores only an opaque conversation ID and UI preference; authorization is an
-  HttpOnly cookie.
+- The browser stores an opaque conversation ID, UI preference, and ordinary reusable form values;
+  authorization is an HttpOnly cookie and private booking lookup proof is explicitly excluded.
 - Platform facts and operation statuses are never guessed by the model.
 - Every write uses a persisted draft and explicit confirmation.
 - Creation retries reuse an idempotency key. Workshop amendment/cancellation retries are locally

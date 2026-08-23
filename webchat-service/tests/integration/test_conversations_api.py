@@ -7,14 +7,633 @@ from fastapi.testclient import TestClient
 from webchat.config import Settings
 from webchat.integrations.contracts import ProviderReply, ToolCall, TurnPlan
 from webchat.main import create_app
-from webchat.orchestration.tool_registry import ToolResult
+from webchat.orchestration.planning.ontology import GoalKey, Goals
+from webchat.orchestration.tools.registry import ToolRegistry
+from webchat.orchestration.tools.result import ToolResult
 
 CONTEXT = {"path": "/", "section": "vehicles", "vehicleId": "veh-001", "title": "Used Cars"}
+
+
+def semantic_plan(
+    key: GoalKey,
+    arguments: dict | None = None,
+    response: str = "",
+) -> TurnPlan:
+    return TurnPlan(key.domain, key.goal, arguments or {}, response)
 
 
 def client(tmp_path: Path) -> TestClient:
     settings = Settings(environment="test", webchat_database_path=tmp_path / "webchat.sqlite3")
     return TestClient(create_app(settings))
+
+
+def test_named_dealership_question_stays_a_card_with_semantic_provider(
+    tmp_path: Path,
+) -> None:
+    class MisroutingProvider:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def generate_turn(self, messages):
+            del messages
+            self.called = True
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.CONVERSATION_RESPOND,
+                    response="Northstar Stockport is on Wellington Road.",
+                ),
+            )
+
+    class DealershipTools:
+        async def execute(self, name, arguments, conversation_id):
+            assert name == "list_dealerships"
+            assert arguments == {"town": "Stockport"}
+            assert conversation_id
+            item = {
+                "id": "dealer-stockport",
+                "name": "Northstar Stockport",
+                "town": "Stockport",
+                "addressLine": "24 Wellington Road",
+                "postcode": "SK4 2BE",
+                "phone": "0161 555 0124",
+            }
+            payload = {"version": 1, "items": [item], "suggestions": []}
+            return ToolResult("Here are our dealerships.", "dealership_list", payload, payload)
+
+    provider = MisroutingProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        browser.app.state.orchestrator.tools = DealershipTools()
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "Where is the Stockport dealership?",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assistant = response.json()["messages"][1]
+    assert assistant["viewType"] == "dealership_list"
+    assert assistant["view"]["items"][0]["name"] == "Northstar Stockport"
+    assert provider.called is True
+
+
+def test_pch_definition_reaches_online_semantic_provider_before_safety_gate(
+    tmp_path: Path,
+) -> None:
+    class DefinitionProvider:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def generate_turn(self, messages):
+            del messages
+            self.called = True
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.CONVERSATION_RESPOND,
+                    response=(
+                        "PCH means Personal Contract Hire. It is a long-term vehicle "
+                        "rental, and you return the vehicle at the end of the agreement."
+                    ),
+                ),
+            )
+
+    class NoTools:
+        async def execute(self, name, arguments, conversation_id):
+            raise AssertionError(
+                f"Definition unexpectedly called {name} with {arguments} "
+                f"for {conversation_id}"
+            )
+
+    provider = DefinitionProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        browser.app.state.orchestrator.tools = NoTools()
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "what is pch",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert provider.called is True
+    assistant = response.json()["messages"][1]
+    assert "Personal Contract Hire" in assistant["text"]
+    assert "viewType" not in assistant
+
+
+@pytest.mark.parametrize(
+    "wording",
+    [
+        "will you pick up the car?",
+        "will you pick up my car?",
+        "will you pick up car",
+        "Can Northstar collect my car?",
+        "Can you collect the vehicle from my home?",
+        "Do you offer vehicle collection?",
+        "Can you deliver or collect my car?",
+        "Will someone come and collect it?",
+    ],
+)
+def test_misclassified_collection_question_never_renders_vehicle_or_notice_cards(
+    tmp_path: Path,
+    wording: str,
+) -> None:
+    class SemanticProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            del messages
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderReply(
+                    "", plan=semantic_plan(Goals.PART_EXCHANGE_ESTIMATE)
+                )
+            # Reproduce the hosted-provider failure: the plan is schema-valid,
+            # but a default sort is not evidence of an inventory request.
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.VEHICLE_SEARCH, {"sort": "priceAsc"}),
+            )
+
+    class BusinessGateway:
+        async def get_business_information(self):
+            return {
+                "organisation": "Northstar Motors",
+                "finance": {"notice": "Finance notice."},
+                "partExchange": {"estimateNotice": "Estimate notice."},
+                "privacyContact": "privacy@example.test",
+            }
+
+    provider = SemanticProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        browser.app.state.orchestrator.tools = ToolRegistry(BusinessGateway())
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        conversation_id = created["conversationId"]
+        estimate = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "I want an indicative part-exchange estimate",
+                "pageContext": CONTEXT,
+            },
+        )
+        pickup = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": wording,
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert estimate.status_code == 200
+    assert estimate.json()["messages"][1]["viewType"] == "part_exchange_estimate_form"
+    assert pickup.status_code == 200
+    assistant = pickup.json()["messages"][1]
+    assert assistant["text"].startswith(
+        "I don't have confirmed Northstar information"
+    )
+    assert "viewType" not in assistant
+    assert "Finance notice" not in assistant["text"]
+    assert "Estimate notice" not in assistant["text"]
+    assert "privacy@example.test" not in assistant["text"]
+    assert provider.calls == 2
+
+
+@pytest.mark.parametrize(
+    "wording",
+    [
+        "will you pick up the car?",
+        "will you pick up my car?",
+        "will you pick up car",
+    ],
+)
+def test_online_prose_fallback_cannot_bypass_goal_conformance(
+    tmp_path: Path,
+    wording: str,
+) -> None:
+    class ProseProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            del messages
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderReply(
+                    "", plan=semantic_plan(Goals.PART_EXCHANGE_ESTIMATE)
+                )
+            return ProviderReply(
+                "",
+                plan=semantic_plan(
+                    Goals.CONVERSATION_RESPOND,
+                    response="Yes, Northstar will collect your car.",
+                ),
+            )
+
+    class BusinessGateway:
+        async def get_business_information(self):
+            return {
+                "organisation": "Northstar Motors",
+                "finance": {"notice": "Finance notice."},
+                "partExchange": {"estimateNotice": "Estimate notice."},
+                "privacyContact": "privacy@example.test",
+            }
+
+    provider = ProseProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        browser.app.state.orchestrator.tools = ToolRegistry(BusinessGateway())
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        conversation_id = created["conversationId"]
+        browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "I want an indicative part-exchange estimate",
+                "pageContext": CONTEXT,
+            },
+        )
+        pickup = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": wording,
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert pickup.status_code == 200
+    assistant = pickup.json()["messages"][1]
+    assert assistant["text"].startswith(
+        "I don't have confirmed Northstar information"
+    )
+    assert "viewType" not in assistant
+    assert "collect your car" not in assistant["text"]
+    assert provider.calls == 2
+
+
+def test_explicit_pch_offer_request_stays_on_live_offer_cards(tmp_path: Path) -> None:
+    class MisroutingProvider:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def generate_turn(self, messages):
+            del messages
+            self.called = True
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.CONVERSATION_RESPOND,
+                    response="Please check our finance page for current offers.",
+                ),
+            )
+
+    class OfferTools:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, name, arguments, conversation_id):
+            assert conversation_id
+            self.calls.append((name, arguments))
+            payload = {
+                "version": 1,
+                "items": [{"id": "offer-001", "productType": "PCH"}],
+                "suggestions": [],
+            }
+            return ToolResult("Found 1 result.", "offer_list", payload, payload)
+
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    provider = MisroutingProvider()
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        tools = OfferTools()
+        browser.app.state.orchestrator.tools = tools
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "show me current PCH offers",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert provider.called is True
+    assert tools.calls == [("list_offers", {})]
+    assert response.json()["messages"][1]["viewType"] == "offer_list"
+
+
+def test_conversation_response_vehicle_search_is_replaced_by_application_route(
+    tmp_path: Path,
+) -> None:
+    class ProseProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            del messages
+            self.calls += 1
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.CONVERSATION_RESPOND,
+                    response="We have several affordable cars available.",
+                ),
+            )
+
+    class VehicleTools:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, name, arguments, conversation_id):
+            self.calls.append((name, arguments))
+            assert conversation_id
+            assert name == "search_vehicles"
+            payload = {
+                "version": 1,
+                "items": [{"id": "veh-001", "make": "Volvo", "model": "XC40"}],
+                "suggestions": [],
+            }
+            return ToolResult("I found 1 vehicle.", "vehicle_list", payload, payload)
+
+    provider = ProseProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        tools = VehicleTools()
+        browser.app.state.orchestrator.tools = tools
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "show me cars under £30,000",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert provider.calls == 1
+    assert tools.calls == [
+        ("search_vehicles", {"sort": "priceAsc", "maxPricePence": 3_000_000})
+    ]
+    assert response.json()["messages"][1]["viewType"] == "vehicle_list"
+
+
+def test_conversation_response_after_facets_still_reaches_vehicle_cards(
+    tmp_path: Path,
+) -> None:
+    class ProseProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            del messages
+            self.calls += 1
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.CONVERSATION_RESPOND,
+                    response="We have automatic Volvo models available.",
+                ),
+            )
+
+    class FacetTools:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, name, arguments, conversation_id):
+            self.calls.append((name, arguments))
+            assert conversation_id
+            if name == "get_vehicle_facets":
+                return ToolResult(
+                    "Loaded options.",
+                    None,
+                    None,
+                    {"makes": ["Volvo"], "transmissions": ["Automatic"]},
+                )
+            assert name == "search_vehicles"
+            payload = {
+                "version": 1,
+                "items": [{"id": "veh-001", "make": "Volvo", "model": "XC40"}],
+                "suggestions": [],
+            }
+            return ToolResult("I found 1 vehicle.", "vehicle_list", payload, payload)
+
+    provider = ProseProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        tools = FacetTools()
+        browser.app.state.orchestrator.tools = tools
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "show me automatic Volvos",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert provider.calls == 2
+    assert tools.calls == [
+        ("get_vehicle_facets", {}),
+        (
+            "search_vehicles",
+            {"sort": "priceAsc", "make": "Volvo", "transmission": "Automatic"},
+        ),
+    ]
+    assert response.json()["messages"][1]["viewType"] == "vehicle_list"
+
+
+def test_conversation_response_workshop_booking_gets_one_replan(tmp_path: Path) -> None:
+    class ReplanningProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderReply(
+                    "",
+                    plan=semantic_plan(Goals.CONVERSATION_RESPOND,
+                        response="Contact a workshop to arrange an MOT.",
+                    ),
+                )
+            assert any(
+                message.get("role") == "developer"
+                and "previous conversation.respond plan was rejected"
+                in str(message.get("content"))
+                for message in messages
+            )
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.WORKSHOP_BOOK_SERVICE, {"serviceQuery": "MOT"}),
+            )
+
+    class WorkshopTools:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, name, arguments, conversation_id):
+            self.calls.append((name, arguments))
+            assert conversation_id
+            payload = {"version": 1, "items": [{"id": "ws-slot-0001"}]}
+            return ToolResult("I found 1 appointment.", "slot_list", payload, payload)
+
+    provider = ReplanningProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        tools = WorkshopTools()
+        browser.app.state.orchestrator.tools = tools
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "I want to book an MOT appointment",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert provider.calls == 2
+    assert tools.calls == [("list_workshop_slots", {"serviceTypeName": "MOT"})]
+    assert response.json()["messages"][1]["viewType"] == "slot_list"
+
+
+def test_repeated_business_conversation_response_gets_safe_clarification(
+    tmp_path: Path,
+) -> None:
+    class RepeatingProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            del messages
+            self.calls += 1
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.CONVERSATION_RESPOND,
+                    response="Call the workshop and ask for an appointment.",
+                ),
+            )
+
+    class NoTools:
+        async def execute(self, name, arguments, conversation_id):
+            raise AssertionError((name, arguments, conversation_id))
+
+    provider = RepeatingProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        browser.app.state.orchestrator.tools = NoTools()
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "I want to book an MOT appointment",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert provider.calls == 2
+    assert response.json()["messages"][1]["text"].startswith(
+        "I want to make sure I use the right live Northstar information."
+    )
+
+
+def test_conversation_response_still_handles_genuine_conversation(tmp_path: Path) -> None:
+    class GreetingProvider:
+        async def generate_turn(self, messages):
+            del messages
+            return ProviderReply(
+                "", plan=semantic_plan(Goals.CONVERSATION_RESPOND, response="You're welcome.")
+            )
+
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+        semantic_plan_policy_mode="enforce",
+    )
+    with TestClient(create_app(settings, provider=GreetingProvider())) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "thanks",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["messages"][1]["text"] == "You're welcome."
 
 
 def test_restore_hides_only_forms_completed_before_a_receipt(tmp_path: Path) -> None:
@@ -55,6 +674,54 @@ def test_restore_hides_only_forms_completed_before_a_receipt(tmp_path: Path) -> 
         "Register my interest again.",
         "Complete the new form.",
     ]
+
+
+def test_cancelled_workshop_change_replaces_review_with_persisted_receipt(
+    tmp_path: Path,
+) -> None:
+    with client(tmp_path) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        conversation_id = created["conversationId"]
+        draft = browser.app.state.workflow_repository.create_or_replace(
+            conversation_id,
+            "workshop_amend",
+            {"verifiedGrantId": "grant-1", "mileage": 12_000},
+            "workshop-amendment",
+            "awaiting_confirmation",
+        )
+        browser.app.state.messages.add(
+            conversation_id,
+            "assistant",
+            "Please review the details below.",
+            None,
+            "confirmation",
+            (
+                '{"kind":"workshop_amend","draftId":"'
+                + draft["id"]
+                + '"}'
+            ),
+        )
+
+        cancelled = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/drafts/{draft['id']}/cancel",
+            json={},
+        )
+        restored = browser.get(
+            f"/api/chat/v1/conversations/{conversation_id}"
+        ).json()
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["result"] == {
+        "kind": "workshop_change_abandoned",
+        "status": "cancelled",
+    }
+    assert len(restored["messages"]) == 1
+    assert restored["messages"][0]["viewType"] == "receipt"
+    assert restored["messages"][0]["text"] == (
+        "Your current workshop booking has been kept."
+    )
 
 
 def test_restore_reconstructs_legacy_receipt_and_keeps_new_repeat_form(tmp_path: Path) -> None:
@@ -431,7 +1098,23 @@ def test_facet_read_still_returns_interactive_choice_chips(tmp_path: Path) -> No
     ]
 
 
-def test_selected_service_chip_always_returns_the_appointment_picker(tmp_path: Path) -> None:
+def test_service_text_reaches_provider_and_returns_the_appointment_picker(
+    tmp_path: Path,
+) -> None:
+    class BookingProvider:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def generate_turn(self, messages):
+            del messages
+            self.called = True
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.WORKSHOP_BOOK_SERVICE,
+                    {"serviceQuery": "Brake inspection"},
+                ),
+            )
+
     class FakeTools:
         async def execute(self, name, arguments, conversation_id):
             assert name == "list_workshop_slots"
@@ -440,7 +1123,12 @@ def test_selected_service_chip_always_returns_the_appointment_picker(tmp_path: P
             payload = {"version": 1, "items": [{"id": "ws-slot-0001"}]}
             return ToolResult("Found 1 result.", "slot_list", payload, payload)
 
-    with client(tmp_path) as browser:
+    provider = BookingProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
         created = browser.post("/api/chat/v1/conversations", json={"pageContext": CONTEXT})
         conversation_id = created.json()["conversationId"]
         browser.app.state.orchestrator.tools = FakeTools()
@@ -455,6 +1143,7 @@ def test_selected_service_chip_always_returns_the_appointment_picker(tmp_path: P
         )
 
     assert response.status_code == 200
+    assert provider.called is True
     assistant = response.json()["messages"][1]
     assert assistant["viewType"] == "slot_list"
     assert assistant["view"]["items"] == [{"id": "ws-slot-0001"}]
@@ -560,8 +1249,7 @@ def test_typed_workshop_plan_cannot_turn_into_an_optional_location_question(
         async def generate_turn(self, messages):
             return ProviderReply(
                 "",
-                plan=TurnPlan(
-                    "workshop_booking",
+                plan=semantic_plan(Goals.WORKSHOP_BOOK_SERVICE,
                     {"serviceQuery": "tyres"},
                     "Which town would you like the appointment in?",
                 ),
@@ -595,6 +1283,93 @@ def test_typed_workshop_plan_cannot_turn_into_an_optional_location_question(
     assert response.status_code == 200
     assert tools.calls == [("list_workshop_slots", {"serviceTypeName": "tyres"})]
     assert response.json()["messages"][1]["viewType"] == "slot_list"
+
+
+def test_contextual_workshop_location_cannot_fall_through_to_dealership_lookup(
+    tmp_path: Path,
+) -> None:
+    class MisroutingProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate_turn(self, messages):
+            del messages
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderReply(
+                    "",
+                    plan=semantic_plan(Goals.WORKSHOP_BOOK_SERVICE, {"serviceQuery": "tyres"}),
+                )
+            return ProviderReply(
+                "",
+                plan=semantic_plan(Goals.DEALERSHIP_FIND,
+                    {"town": "Bolton for it"},
+                ),
+            )
+
+    class WorkshopTools:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, name, arguments, conversation_id):
+            assert conversation_id
+            self.calls.append((name, arguments))
+            assert name == "list_workshop_slots"
+            payload = {
+                "version": 1,
+                "items": [
+                    {
+                        "id": "ws-slot-0005",
+                        "dealershipTown": arguments.get("dealershipTown", "Liverpool"),
+                        "serviceTypeName": "Tyre fitting",
+                    }
+                ],
+            }
+            return ToolResult("Found 1 result.", "slot_list", payload, payload)
+
+    provider = MisroutingProvider()
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+    )
+    with TestClient(create_app(settings, provider=provider)) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        conversation_id = created["conversationId"]
+        tools = WorkshopTools()
+        browser.app.state.orchestrator.tools = tools
+
+        first = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "I want to fit tyres",
+                "pageContext": CONTEXT,
+            },
+        )
+        second = browser.post(
+            f"/api/chat/v1/conversations/{conversation_id}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": "is there a location in bolton for it?",
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert provider.calls == 2
+    assert tools.calls == [
+        ("list_workshop_slots", {"serviceTypeName": "tyres"}),
+        (
+            "list_workshop_slots",
+            {"dealershipTown": "Bolton", "serviceTypeName": "tyres"},
+        ),
+    ]
+    assistant = second.json()["messages"][1]
+    assert assistant["viewType"] == "slot_list"
+    assert assistant["view"]["items"][0]["dealershipTown"] == "Bolton"
 
 
 @pytest.mark.parametrize(
@@ -924,6 +1699,7 @@ def test_test_drive_contact_details_are_validated_before_draft_creation(tmp_path
             f"/api/chat/v1/conversations/{conversation_id}/test-drive-drafts",
             json={
                 "slotId": "td-slot-0001",
+                "vehicleId": "veh-001",
                 "firstName": "J1",
                 "lastName": "S",
                 "email": "not-an-email",
@@ -954,6 +1730,7 @@ def test_test_drive_contact_phone_is_normalized_before_draft_creation(tmp_path: 
             f"/api/chat/v1/conversations/{conversation_id}/test-drive-drafts",
             json={
                 "slotId": "td-slot-0001",
+                "vehicleId": "veh-001",
                 "firstName": "Jo",
                 "lastName": "Smith",
                 "email": "jo@example.com",
@@ -1011,6 +1788,8 @@ def test_workshop_details_are_validated_and_normalized_before_draft_creation(
             f"/api/chat/v1/conversations/{conversation_id}/workshop-drafts",
             json={
                 "slotId": "ws-slot-0001",
+                "serviceTypeId": "full-service",
+                "dealershipId": "northstar-manchester",
                 "firstName": "Jo",
                 "lastName": "Smith",
                 "email": "jo@example.com",

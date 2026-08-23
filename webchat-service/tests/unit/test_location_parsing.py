@@ -1,7 +1,7 @@
 import pytest
 
-from webchat.integrations.llm import FakeLlmProvider
-from webchat.integrations.local_assistant.parsers import location_query
+from webchat.integrations.fake_llm import FakeLlmProvider
+from webchat.orchestration.routing.parsers import location_query
 
 
 @pytest.mark.parametrize(
@@ -27,8 +27,9 @@ async def test_named_dealership_contact_question_is_filtered_to_that_town() -> N
         [{"role": "user", "content": "What is the phone number and email for Manchester sales?"}]
     )
 
-    assert reply.tool_calls[0].name == "list_dealerships"
-    assert reply.tool_calls[0].arguments == {"town": "Manchester"}
+    assert reply.plan is not None
+    assert (reply.plan.domain, reply.plan.goal) == ("dealership", "view_contact")
+    assert reply.plan.arguments == {"town": "Manchester"}
 
 
 @pytest.mark.asyncio
@@ -37,8 +38,12 @@ async def test_named_dealership_hours_are_filtered_to_that_town() -> None:
         [{"role": "user", "content": "Manchester dealership holiday opening hours"}]
     )
 
-    assert reply.tool_calls[0].name == "list_opening_hours"
-    assert reply.tool_calls[0].arguments == {"town": "Manchester"}
+    assert reply.plan is not None
+    assert (reply.plan.domain, reply.plan.goal) == (
+        "dealership",
+        "view_opening_hours",
+    )
+    assert reply.plan.arguments == {"town": "Manchester"}
 
 
 @pytest.mark.asyncio
@@ -47,7 +52,8 @@ async def test_named_department_hours_keep_both_town_and_department() -> None:
         [{"role": "user", "content": "Stockport parts opening hours"}]
     )
 
-    assert reply.tool_calls[0].arguments == {
+    assert reply.plan is not None
+    assert reply.plan.arguments == {
         "town": "Stockport",
         "department": "parts",
     }

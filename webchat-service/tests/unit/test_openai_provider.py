@@ -4,6 +4,28 @@ import httpx
 import pytest
 
 from webchat.integrations.openai_provider import OpenAIProvider, response_input
+from webchat.orchestration.planning.ontology import ALL_GOALS
+from webchat.orchestration.planning.turn_plan import turn_plan_definition
+
+
+def test_hosted_schema_contains_every_and_only_canonical_domain_goal() -> None:
+    parameters = turn_plan_definition()["parameters"]
+    schema_goals = set()
+    for definition in parameters["$defs"].values():
+        properties = definition.get("properties", {})
+        if "domain" not in properties or "goal" not in properties:
+            continue
+        goal_schema = properties["goal"]
+        goals = (
+            goal_schema["enum"]
+            if "enum" in goal_schema
+            else [goal_schema["const"]]
+        )
+        schema_goals.update(
+            (properties["domain"]["const"], goal) for goal in goals
+        )
+
+    assert schema_goals == {(key.domain, key.goal) for key in ALL_GOALS}
 
 
 @pytest.mark.asyncio
@@ -15,8 +37,10 @@ async def test_responses_request_is_stateless_and_requires_one_typed_turn_plan()
         assert body["tool_choice"] == {"type": "function", "name": "plan_customer_turn"}
         assert [tool["name"] for tool in body["tools"]] == ["plan_customer_turn"]
         planner = body["tools"][0]
-        assert "maxPricePence" in planner["parameters"]["properties"]
-        assert "workshop_booking" in planner["parameters"]["properties"]["intent"]["enum"]
+        serialized_schema = json.dumps(planner["parameters"])
+        assert "maxPricePence" in serialized_schema
+        assert "book_service" in serialized_schema
+        assert "workshop" in serialized_schema
         assert request.headers["Authorization"] == "Bearer secret"
         return httpx.Response(
             200,
@@ -27,7 +51,10 @@ async def test_responses_request_is_stateless_and_requires_one_typed_turn_plan()
                         "type": "function_call",
                         "call_id": "call-1",
                         "name": "plan_customer_turn",
-                        "arguments": '{"intent":"vehicle_search","make":"Volvo"}',
+                        "arguments": (
+                            '{"version":2,"domain":"vehicle",'
+                            '"goal":"search","make":"Volvo"}'
+                        ),
                     }
                 ],
             },
@@ -41,7 +68,7 @@ async def test_responses_request_is_stateless_and_requires_one_typed_turn_plan()
 
     assert reply.tool_calls == []
     assert reply.plan is not None
-    assert reply.plan.intent == "vehicle_search"
+    assert (reply.plan.domain, reply.plan.goal) == ("vehicle", "search")
     assert reply.plan.arguments["make"] == "Volvo"
 
 

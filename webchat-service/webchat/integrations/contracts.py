@@ -15,9 +15,11 @@ class ToolCall:
 class TurnPlan:
     """A semantic decision produced by the model and executed by the application."""
 
-    intent: str
+    domain: str
+    goal: str
     arguments: dict[str, Any] = field(default_factory=dict)
     response: str = ""
+    version: int = 2
 
 
 @dataclass(frozen=True)

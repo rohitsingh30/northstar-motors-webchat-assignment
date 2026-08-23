@@ -11,6 +11,34 @@ Vehicle discovery
 - “Is this vehicle available?”
 - “What does reserved mean for this vehicle?”
 - “What new-car offers are currently published?”
+
+Vehicle-search routing regression checks
+- “Will you pick up the car?”
+- “Will you pick up my car?”
+- “Will you pick up car?”
+- “Can Northstar collect my car?”
+- “Can you collect the vehicle from my home?”
+- “Do you offer vehicle collection?”
+- “Can you deliver or collect my car?”
+- “Will someone come and collect it?”
+
+For every question above, verify that no vehicle-results card is shown. Northstar's current
+authoritative data does not confirm a collection policy, so the safe response says the information
+is not confirmed and offers dealership contact. These controls were also tested to ensure real
+inventory requests remain intact. “Show me cars” opens the broad preference chooser; each filtered
+or ranked request returns vehicle results:
+
+- “Show me cars.”
+- “Show me the cheapest available cars.”
+- “Cars below £35,000.”
+- “I need a petrol automatic SUV.”
+- “Find BMWs in Stockport.”
+- “Find hybrid SUVs below £45,000.”
+- “Actually, make that diesel and under £30,000.”
+- “Only show me 2024 or newer cars.”
+- “Browse the latest vehicle stock.”
+- “List the lowest mileage cars.”
+
 Sales support
 - “Is the BMW 3 Series available?”
 - “I have a general question about buying this car.”

@@ -1,357 +1,382 @@
 # Northstar Motors AI Webchat — High-Level Design
 
-## 1. Design goals
+## 1. Document status and scope
 
-The solution adds an embedded chat experience without changing the supplied dealership platform.
-It keeps all secrets and protected operations server-side, uses the dealership API as the sole
-business source of truth, and separates probabilistic language understanding from deterministic
-authorization and workflow rules.
+This document describes the **current implementation** of `webchat-service`, not a proposed future
+architecture. The service adds an AI-assisted webchat to the dealership website while treating the
+supplied dealership platform as the authoritative business system.
 
-## 2. Proposed technology
+The design has three non-negotiable boundaries:
 
-| Area | Choice | Reason |
-| --- | --- | --- |
-| Chat UI | Native HTML, CSS, and ES modules | Fits the dependency-light host website and permits full accessible interaction control |
-| Webchat backend | Python 3.12 with FastAPI | Typed request validation, async upstream HTTP, and straightforward testing |
-| Persistence | SQLite | Local, durable, transactional, and requires no additional hosted service |
-| LLM integration | OpenAI Responses API behind a provider interface | Tool calling and provider isolation; model is configurable |
-| Dealership integration | Typed async HTTP adapter | Centralizes authentication, timeout, validation, retries, and error mapping |
-| Runtime | Docker Compose | Matches the supplied clean-checkout workflow |
-| Tests | Pytest plus browser tests | Covers application logic, API integration, and accessible user journeys |
+- dealership and AI credentials stay on the server;
+- language understanding may be probabilistic, but tool selection, validation, state transitions,
+  confirmation, persistence, and business effects are application-owned;
+- `dealership-platform` remains an external dependency and is not modified by the webchat.
 
-These choices are implementation decisions for this assignment, not changes to the supplied
-dealership service.
+## 2. Goals and quality attributes
 
-## 3. System context
-
-```mermaid
-flowchart LR
-    H[Dealership website] -->|Loads one module script| W[Webchat service]
-    C[Customer browser] --> H
-    C -->|Restricted-origin JSON| W
-    C -->|Public catalogue reads used by host site| D[Dealership platform]
-    W -->|Public reads and protected writes| D
-    W -->|Prompt and approved tool loop| L[LLM provider]
-    W --> S[(Webchat SQLite)]
-    A[Systems Console] --> D
-```
-
-Trust boundaries:
-
-- The browser is untrusted and never receives the dealership or LLM API key.
-- The webchat service owns conversation authorization, validation, tool policy, confirmations,
-  idempotency, and persistence.
-- The LLM proposes structured tool calls but cannot access the network or database directly.
-- The dealership platform remains authoritative for business data and state transitions.
-
-## 4. Container and network architecture
-
-Docker Compose will contain three services:
-
-1. `dealership-platform` on host port 4010, unchanged.
-2. `dealership-website` on host port 4173, unchanged except for one external widget script tag.
-3. `webchat-service` on host port 4020, serving both widget assets and the API, and using an internal URL such as
-   `http://dealership-platform:4010` for platform calls.
-
-For local development, the service permits credentialed requests only from the configured website
-origin. The conversation token remains in an HttpOnly cookie and JavaScript receives only the
-opaque conversation ID. Production may route `/widget` and `/api/chat` through the website's edge
-origin without changing the widget or dealership application.
-
-The chat service uses a named volume for its SQLite database. The existing platform volume and
-reset behaviour stay unchanged. The webchat can expose its own explicit reset command for local
-development, but the supplied `reset.sh` must continue to mean “restore dealership seed data”.
-
-## 5. Major components
-
-### 5.1 Embedded webchat UI
-
-Responsibilities:
-
-- launcher, panel/dialog, transcript, composer, unread count, and status announcements;
-- render text plus typed cards for vehicles, offers, slots, choices, confirmation summaries, and
-  operation receipts;
-- gather page context from allow-listed DOM/URL values;
-- retain only the opaque conversation ID and non-sensitive UI preferences in browser storage;
-- send messages, show an immediate generic progress state, retry safely, and restore history;
-- manage focus, keyboard use, screen-reader announcements, and responsive layout.
-
-The UI does not render arbitrary model HTML. Rich output uses a closed set of JSON view models and
-safe DOM creation. Plain assistant text is rendered as text with an allow-listed link format.
-
-### 5.2 Public chat API
-
-Responsibilities:
-
-- create and authorize anonymous conversations;
-- accept user messages and page context;
-- serialize concurrent turns per conversation;
-- expose history and safe deduplicated retry endpoints;
-- enforce size limits and origin/rate controls;
-- return one complete, structured JSON result for each synchronous turn request.
-
-### 5.3 Conversation orchestrator
-
-Responsibilities:
-
-- load recent messages, active workflow, selected entities, and compact summary;
-- construct the system policy and tool catalogue;
-- run a bounded model/tool loop;
-- pass tool proposals to the policy engine;
-- persist tool results and the final response atomically where possible;
-- convert deterministic business outcomes into safe response facts/view models.
-
-Only a bounded number of model/tool iterations and tool calls are allowed per turn. Model failure
-does not erase a pending workflow or create an unconfirmed write.
-
-### 5.4 Workflow and policy engine
-
-This is the safety-critical boundary. It owns:
-
-- supported intent/tool allow-list;
-- per-operation required fields and server-side validation;
-- draft state and missing-field detection;
-- explicit confirmation state and confirmation invalidation;
-- availability rechecks before dependent actions;
-- verified-booking scope for amendment/cancellation;
-- idempotency key creation and reuse for record creation, plus local action deduplication for
-  amendments and cancellations;
-- mapping of platform statuses and errors to permitted customer claims.
-
-The LLM cannot directly call a mutation tool. It can prepare a draft and request confirmation. A
-separate confirmation action checks the stored draft hash and invokes the platform adapter.
-
-### 5.5 Dealership platform adapter
-
-Responsibilities:
-
-- provide one typed method for each supported platform operation;
-- attach `X-API-Key` only to protected calls;
-- attach the persisted `Idempotency-Key` to record-creation endpoints that support it;
-- enforce connect/read timeouts and response-size limits;
-- normalize money, timestamps, relative asset URLs, and structured errors;
-- retry safe reads and eligible timed-out record creation using the same idempotency key;
-- never log request bodies containing personal data.
-
-### 5.6 LLM provider adapter
-
-Responsibilities:
-
-- expose a provider-neutral `generate_turn` interface;
-- translate internal tool definitions to the provider format;
-- enforce model name, timeout, maximum output, and bounded retries;
-- record usage/latency without storing secrets or raw personal data in operational logs;
-- provide a deterministic fake for tests.
-
-The model receives only the minimum conversation window and tool results needed for the turn.
-Sensitive lookup proof values are not included again after the deterministic lookup completes.
-
-### 5.7 Persistence
-
-SQLite stores:
-
-- conversations and opaque authorization-token hashes;
-- messages and typed view payloads, with sensitive workflow submissions represented by redacted
-  placeholders rather than their raw values;
-- workflow drafts and confirmation hashes;
-- model/tool turn records and sanitized errors;
-- business-operation attempts, idempotency keys, and returned public references;
-- temporary verified-booking grants scoped to a conversation.
-
-Database access is behind repositories. Migrations run during startup in a transaction. Sensitive
-fields use a retention category so cleanup can remove them earlier than ordinary transcript data.
-
-### 5.8 Observability
-
-Structured JSON logs include timestamp, correlation ID, conversation ID hash, turn ID, component,
-operation name, duration, result category, retry count, and upstream status/code. They exclude
-message bodies and customer contact/lookup values.
-
-Metrics suitable for a later production deployment include turn latency, tool error rate,
-conversation recovery, mutation success by operation type, LLM timeout, and upstream timeout.
-
-## 6. Request lifecycle
-
-### 6.1 Normal conversational turn
-
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant API as Chat API
-    participant O as Orchestrator
-    participant M as LLM
-    participant P as Policy/Tools
-    participant D as Dealership API
-
-    B->>API: POST message + page context
-    API->>O: authorized serialized turn
-    O->>M: policy + history + tool schemas
-    M-->>O: structured tool proposal
-    O->>P: validate proposal
-    P->>D: authorized read, if approved
-    D-->>P: authoritative result
-    P-->>O: normalized safe result
-    O->>M: tool result
-    M-->>O: response composition
-    O-->>API: persisted response + view models
-    API-->>B: complete JSON response
-```
-
-### 6.2 Confirmed record creation
-
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant O as Orchestrator
-    participant W as Workflow engine
-    participant DB as SQLite
-    participant D as Dealership API
-
-    B->>O: Details for requested operation
-    O->>W: Prepare validated draft
-    W->>DB: Store draft + material-field hash
-    W-->>B: Confirmation summary
-    B->>O: Confirm draft ID
-    O->>W: Confirm stored draft
-    W->>DB: Persist idempotency key before call
-    W->>D: Protected create + same key
-    D-->>W: Authoritative status/reference
-    W->>DB: Store outcome
-    W-->>B: Exact receipt/status
-```
-
-If the response is lost, retrying the same confirmed record creation loads the stored idempotency
-key. Amendments and cancellations use a persisted client action ID for local deduplication; after an
-ambiguous upstream outcome, the service reads the booking state to reconcile rather than assuming
-the mutation failed. If the customer changes a material field, the stored hash changes and a new
-confirmation is required.
-
-### 6.3 Verified workshop management
-
-The assistant opens a structured sensitive-input card for the four lookup values. The card submits
-them to a deterministic lookup endpoint rather than through the chat transcript or LLM. The values
-go directly from validated request state to the dealership lookup adapter and are not persisted or
-logged. On success, the service stores a short-lived grant containing the conversation ID, internal
-booking ID, returned reference, and expiry. Amend/cancel tools require that grant and do not accept
-an arbitrary internal record ID from the model or browser.
-
-## 7. Conversation and tool design
-
-Tools are divided into three classes:
-
-- Reads: vehicle search/details/availability, offers, dealerships/hours, services, locations,
-  slots, business notices.
-- Draft builders: enquiry, test drive, interest, callback, workshop booking, workshop management,
-  message, and valuation.
-- Controlled actions: confirm a stored draft, verify a workshop lookup, amend a verified booking,
-  and cancel a verified booking.
-
-Tool outputs are concise structured facts, not raw unbounded upstream responses. The orchestration
-prompt defines business semantics, but the application also encodes them so correctness does not
-depend on the model remembering prose.
-
-## 8. Data ownership and state
-
-| Data | System of record | Webchat copy |
-| --- | --- | --- |
-| Vehicles, offers, locations, hours, slots | Dealership platform | Turn/tool snapshot only |
-| Business records and statuses | Dealership platform | Operation ID/reference/status snapshot |
-| Conversation messages | Webchat SQLite | Retained conversation with sensitive-form submissions redacted |
-| Pending workflow | Webchat SQLite | Structured draft and confirmation state |
-| API/LLM secrets | Environment | Never persisted or sent to browser |
-| Browser session | Webchat backend | Script stores opaque ID; authorization token is an `HttpOnly` cookie |
-
-No availability or slot cache is trusted for a write. The relevant state is checked again at the
-operation boundary.
-
-## 9. Security design
-
-### Threats and controls
-
-| Threat | Primary controls |
+| Goal | Current design response |
 | --- | --- |
-| API-key exposure | Keys only in webchat environment; no protected browser calls; redacted errors |
-| Prompt injection | Allow-listed tools and parameters; page context treated as data; no model network access |
-| Unconfirmed/incorrect write | Stored draft, material hash, explicit confirmation, deterministic policy check |
-| Duplicate record | Persist key before create; same key/body on retry; per-draft operation state |
-| Booking enumeration | Four-field platform lookup; generic failure; rate limits; no field-specific hints |
-| Cross-conversation access | Same-origin `HttpOnly` cookie with random token, hashed at rest and verified in constant time |
-| XSS from model output | Text rendering and closed typed components; URL scheme/host allow-list |
-| Sensitive logs | Field-level redaction; no bodies; correlation metadata only |
-| Abuse/large inputs | Origin controls, rate limits, schema and length limits, bounded model/tool loops |
-| Race conditions | Per-conversation lock; SQLite transactions; platform atomic slot claims |
+| Safe AI assistance | The model emits one typed semantic plan; application code maps it to exact tools |
+| Authoritative answers | Dynamic vehicle, offer, hours, service, slot, and status facts come from the dealership API |
+| Confirmed writes | Write requests are persisted as drafts and require an explicit confirmation endpoint |
+| Conversation continuity | Messages, page snapshots, workflow state, attempts, and receipts are stored in SQLite |
+| Browser safety | The widget uses closed view types and DOM text APIs rather than model-provided HTML |
+| Privacy | HttpOnly conversation authorization, structured redaction, and a separate booking-proof endpoint |
+| Testability | Provider, platform, repositories, transition routing, and tool handlers have focused interfaces |
+| Local operability | Docker Compose, a fake local provider, health endpoints, and isolated Pytest execution |
 
-Local development uses HTTP with the cookie `Secure` flag disabled by configuration. Production
-requires HTTPS, `Secure` cookies, secure headers, and a restrictive content security policy.
+## 3. Current system architecture
 
-## 10. Resilience and failure handling
+![Current Northstar webchat system architecture](./diagrams/webchat-system-architecture.svg)
 
-- Browser disconnect: turn continues only through the safe stage; a committed write outcome is
-  persisted and visible after reconnect.
-- LLM timeout: no mutation happens unless the deterministic confirmed-action path was reached;
-  workflow state stays recoverable.
-- Dealership read timeout: bounded retry with jitter, then a retryable user message.
-- Dealership record-creation timeout: retry only with the already-persisted key and identical body.
-- Amendment/cancellation timeout: reconcile the booking through an authorized read; do not issue a
-  blind retry when the upstream outcome is unknown.
-- Platform structured error: preserve code and map it to the documented recovery behaviour.
-- Database failure: readiness becomes unhealthy; no unpersisted business write is intentionally
-  started.
-- No result/availability: treat as a valid outcome and offer refinements or alternatives.
+Editable source: [`diagrams/webchat-system-architecture.mmd`](./diagrams/webchat-system-architecture.mmd).
 
-## 11. Deployment configuration
+### 3.1 Runtime containers
 
-Required variables:
+| Container | Host port | Responsibility |
+| --- | ---: | --- |
+| `dealership-website` | 4173 | Hosts the customer website and loads `webchat-service/widget/embed.js` |
+| `webchat-service` | 4020 | Serves the widget, chat API, orchestration, workflows, and webchat SQLite data |
+| `dealership-platform` | 4010 | Authoritative catalogue and protected business operations |
 
-- `OPENAI_API_KEY`
-- `NORTHSTAR_API_KEY`
+The website may continue making its own public catalogue reads. The widget sends credentialed chat
+requests only to `webchat-service`. The webchat calls the dealership platform over the Compose
+network and attaches `X-API-Key` only to protected platform operations.
 
-Documented non-secret variables with defaults:
+### 3.2 Trust boundaries
 
-- `OPENAI_MODEL`
-- `NORTHSTAR_BASE_URL=http://dealership-platform:4010`
-- `WEBCHAT_PORT=4020`
-- `WEBCHAT_DATABASE_PATH=/data/webchat.sqlite3`
-- `WEBCHAT_COOKIE_SECURE=false`
-- `WEBCHAT_RETENTION_DAYS=30`
-- `LOG_LEVEL=INFO`
+- **Browser:** untrusted input and display surface. It never receives the dealership key, OpenAI
+  key, Azure key, server-side booking ID, or idempotency key.
+- **Webchat service:** trusted policy boundary. It authorizes conversations, validates schemas,
+  serializes turns, controls tools, persists workflow state, and performs confirmed effects.
+- **AI provider:** semantic planner only. It cannot access SQLite, call the dealership platform,
+  choose HTTP paths, or confirm a mutation.
+- **Dealership platform:** authoritative source for business facts and operation outcomes.
 
-Compose passes the secret values from a local `.env`; `.env.example` contains names and safe
-defaults only.
+## 4. Technology and deployment choices
 
-## 12. Verification strategy
+| Area | Current choice | Reason |
+| --- | --- | --- |
+| Widget | Native web component, HTML, CSS, and ES modules | Dependency-light integration and explicit DOM safety |
+| Backend | Python 3.12 and FastAPI | Typed validation, async HTTP, and straightforward testing |
+| Persistence | SQLite with migrations and WAL mode | Durable local state without another service |
+| AI | OpenAI Responses API or Azure OpenAI behind `LlmProvider` | Typed planning and provider isolation |
+| Local fallback | `FakeLlmProvider` backed by `DeterministicTurnPlanner` | Same validated plan boundary for deterministic offline development and CI |
+| Platform integration | `httpx.AsyncClient` in `DealershipClient` | One boundary for credentials, timeouts, assets, and errors |
+| Runtime | Docker Compose | Reproducible three-service local environment |
+| Verification | Pytest, Ruff, Node syntax checks, and manual browser journeys | Covers current automated and manual test surfaces |
 
-- Unit tests: workflow transitions, field validation, confirmation invalidation, status/error
-  mapping, money/date formatting, prompt/tool policy, and redaction.
-- Contract tests: every adapter operation against representative OpenAPI responses.
-- Integration tests: real seeded dealership container plus fake LLM; verify platform records and
-  idempotent record-creation retries.
-- LLM behaviour tests: fixed scenarios evaluated for correct tool choice and prohibited claims,
-  separated from deterministic CI tests.
-- Browser tests: persistence, page context, cards/links, focus, keyboard, mobile layout, loading,
-  unread, error recovery, and confirmation.
-- Static checks: secret scanning, lint/format, dependency audit where available, and accessible-name
-  assertions.
+## 5. Major application components
 
-## 13. Delivery sequence
+### 5.1 Browser widget
 
-1. Foundation: service skeleton, migrations, chat session API, fake provider, health checks.
-2. Read journeys: vehicle, offer, dealership, service, location, hours, and slot tools.
-3. UI: accessible shell, history, typed cards, page context, and reconnect behaviour.
-4. Writes: workflow drafts, confirmation engine, dealership writes, and idempotency.
-5. Booking management: lookup proof handling and verified-grant enforcement.
-6. Hardening: error policy, retries, timeouts, retention, rate limiting, redaction, and CSP.
-7. Evidence: automated seeded scenarios, README, environment example, decisions, and limitations.
+The service-hosted `<northstar-chat>` web component owns:
 
-## 14. Architectural decisions and trade-offs
+- launcher, dialog, conversation history, transcript, composer, progress, focus, and unread state;
+- page-context capture from bounded page text, visible controls, structured entities, URL, heading,
+  description, and open host dialogs;
+- safe rendering of vehicles, offers, dealerships, opening hours, services, slots, suggestions,
+  forms, confirmations, booking details, and receipts;
+- synchronous JSON calls to the chat API with credentials included;
+- safe retry identifiers (`clientMessageId` and `clientActionId`);
+- an ordinary-form profile in `localStorage` for reusable form values.
 
-- **Separate webchat service:** adds one local container but prevents secret leakage and gives a
-  clear security/persistence boundary.
-- **SQLite:** ideal for a self-contained assignment; horizontal multi-instance deployment would
-  require a shared database and distributed conversation locking.
-- **Server-owned workflow state:** slightly more code than direct model-to-API calls, but makes
-  confirmation, identity scope, and retries testable and deterministic.
-- **Typed rich components:** less expressive than arbitrary model HTML, but materially safer and
-  more accessible.
-- **Provider abstraction:** preserves testability and avoids coupling application policy to one
-  SDK, while the initial production adapter remains deliberately small.
+Browser storage currently contains the opaque conversation ID, open/closed preference, and ordinary
+form-profile values. Private workshop lookup forms are excluded from profile capture and prefill.
+Conversation authorization remains in the `HttpOnly`, `SameSite=Lax` cookie.
+
+### 5.2 HTTP and security boundary
+
+FastAPI routes under `/api/chat/v1` provide conversation, turn, read-option, draft, confirmation,
+private lookup, and verified workshop-management endpoints. `SecurityMiddleware` applies:
+
+- a 64 KiB declared request-body limit;
+- JSON content-type enforcement for POST/PATCH;
+- exact configured-origin validation for state changes;
+- an in-memory per-client limit of 60 chat API requests per minute;
+- `nosniff`, same-origin referrer policy, and a restrictive response CSP.
+
+Conversation creation sets an opaque session cookie. The database stores a SHA-256 hash, and later
+routes return `404` rather than disclosing whether an unauthorized conversation exists.
+
+### 5.3 Conversation orchestration
+
+`Orchestrator` owns only turn lifecycle:
+
+1. acquire an in-process per-conversation lock;
+2. deduplicate `clientMessageId`;
+3. persist the running turn and user message;
+4. build bounded context;
+5. run a typed action directly or send natural language to the semantic provider;
+6. execute validated tools through the registry;
+7. present and persist the final assistant message;
+8. mark the turn completed or failed with a sanitized error category.
+
+Context, planning, tools, provider loops, presentation, and workflows live in separate packages so
+the coordinator does not own their internal branching.
+
+### 5.4 AI planning and deterministic routing
+
+![AI turn orchestration](./diagrams/ai-turn-orchestration.svg)
+
+Editable source: [`diagrams/ai-turn-orchestration.mmd`](./diagrams/ai-turn-orchestration.mmd).
+
+With OpenAI or Azure configured, the provider exposes only `plan_customer_turn`. The model must
+return exactly one V2 `TurnPlanPayload`: a valid domain-goal pair, that domain's bounded arguments,
+and an optional response. The schema is a discriminated union, so arguments from another domain,
+unknown fields, and invalid domain-goal combinations are rejected before execution.
+`TransitionController` resolves trusted references and workflow context, then
+checks that the typed goal conforms to the current utterance. `ToolTransitionRouter` then maps the
+canonical `GoalKey` to one exact application tool. In particular, `vehicle.search` requires real
+discovery evidence: a substantive stock constraint, explicit inventory-discovery wording, or a
+grounded reference to displayed results. A vehicle noun plus a provider-default sort cannot execute
+the stock API. Conversely, a broad-preference plan carrying an executable stock constraint is
+normalized to vehicle search so valid filters are not discarded behind a chooser.
+
+`SemanticPlanPolicy` evaluates every validated provider plan. Business goals pass directly to
+transition control; only `conversation.respond` can trigger recovery. In enforcement mode, a
+confident deterministic application route replaces unsafe prose. A business-looking request
+without a certain local route gets one constrained re-plan; repeated prose becomes a fixed
+server-owned clarification. Genuine conversation remains eligible for prose. Observe mode logs the
+proposed decision without changing the response; off mode bypasses intervention.
+
+Replacement routes do not execute their tool-shaped result directly. `DeterministicPlanRouter`
+adapts each one into the same schema-validated V2 plan used by the configured provider, so goal
+conformance, state transitions, exact tool mapping, and input filtering cannot be bypassed by the
+online safety path.
+
+Without an OpenAI key in development/test, `FakeLlmProvider` delegates to
+`DeterministicTurnPlanner`. It converts deterministic goal rules and confident local routes into
+the same schema-validated V2 `TurnPlan` returned by OpenAI/Azure. From that point onward, fake and
+hosted requests use the same semantic plan policy, `TransitionController`, `ToolTransitionRouter`,
+`ToolRegistry`, workflow-state handling, and presenter. Deterministic application routing is
+consulted only after a provider proposes `conversation.respond`; it never preempts semantic planning.
+
+The application owns the ontology in `planning/ontology.py`. New workflow state persists
+`{version: 2, domain, goal, stage, entities, constraints}`. A confined compatibility adapter upgrades
+already-stored V1 `intent` states; legacy names are not accepted from new model output.
+
+The provider loop allows at most four iterations—including at most one gate-triggered re-plan—and
+rejects provider responses containing more than four tool calls. A renderable `ToolResult`
+terminates immediately; non-renderable trusted facts may be appended to bounded history for the
+next provider step. The deterministic fact responder remains active when trusted workflow-state
+context follows the tool result in history.
+
+### 5.5 Tool execution
+
+`ToolRegistry` is a dispatcher over focused capability handlers:
+
+| Handler | Capability |
+| --- | --- |
+| `VehicleToolHandler` | Search, page-scoped selection, facets, details, availability, comparison |
+| `CatalogueToolHandler` | Offers, dealerships, departments, opening hours, business information |
+| `BusinessInformationResolver` | Match exact questions to described live platform facts and reject unsupported answers |
+| `WorkshopReadToolHandler` | Service information, services, locations, test-drive and workshop slots |
+| `FormToolHandler` | Private lookup form, part-exchange estimate form, indicative estimate |
+| `WorkflowToolHandler` | Prepare supported write-workflow drafts and confirmation views |
+
+Inputs use strict Pydantic models with unknown fields rejected. Every handler returns the shared
+`ToolResult` contract: customer-facing text, an optional closed view type/payload, and trusted facts.
+
+Customer-entered town names are matched against the live dealership list. Exact normalized matches
+win; otherwise a conservative similarity threshold and uniqueness margin allow clear misspellings
+such as `Manchaester` while leaving unrelated or ambiguous locations unresolved.
+
+Named workshop-service questions are resolved against the current live service catalogue. The
+result is typed as `matched`, `ambiguous`, or `unsupported`. An unsupported service such as car
+cleaning receives a concise unavailable response plus a link to browse supported services; it does
+not render the entire catalogue as though the question were a browse request.
+
+Business-information plans carry the untouched customer question from transition context into a
+fact resolver. The resolver searches descriptions and current values for the requested topic; the
+topic alone is never evidence that a fact answers the question. A match renders only the selected
+fact, while ambiguous or unavailable outcomes terminate with application-owned text. Existing
+version-1 bulk cards remain renderable when old conversations are restored, but new turns never
+expose unrelated finance, privacy, and part-exchange notices together.
+
+If an operational question is misclassified as `vehicle.search` without discovery evidence,
+transition conformance redirects it to scoped business-information answerability before any stock
+tool runs. Relevant active context selects the topic, but never supplies an answer. When the live
+facts do not describe that policy, the resolver fails closed and offers dealership contact.
+
+### 5.6 Workflow safety boundary
+
+![Write workflow lifecycle](./diagrams/write-workflow-lifecycle.svg)
+
+Editable source: [`diagrams/write-workflow-lifecycle.mmd`](./diagrams/write-workflow-lifecycle.mmd).
+
+The workflow service supports sales enquiries, test drives, reserved-vehicle interest, callbacks,
+workshop bookings, workshop amendments/cancellations, dealership messages, and part exchange.
+
+Preparation validates required fields, stores a new draft and SHA-256 material hash, and returns
+either a collecting form or confirmation summary. Confirmation accepts only the stored draft ID and
+a `clientActionId`. An atomic transaction moves the draft to `executing` and persists the operation
+attempt and idempotency key before the protected call.
+
+Creation operations use the persisted idempotency key. Vehicle interest rechecks that the vehicle
+is currently reserved. Workshop amend/cancel requires a valid conversation-scoped verified grant.
+Successful public receipts replace stale draft cards and are reconciled during history restoration.
+
+### 5.7 Dealership integration
+
+`DealershipClient` owns all platform HTTP traffic. It:
+
+- uses 3-second connect and 8-second overall timeouts;
+- attaches `X-API-Key` only for protected operations;
+- attaches `Idempotency-Key` to supported record creation;
+- normalizes platform-relative asset URLs;
+- proxies vehicle images only from the expected platform host and asset path;
+- normalizes structured upstream errors into `DealershipError`;
+- rejects declared JSON responses over 2 MB and vehicle images over 5 MB.
+
+The current adapter does **not** automatically retry platform calls.
+
+### 5.8 Persistence and restoration
+
+SQLite stores conversations, session hashes, initial/current page context, workflow state, turns,
+messages, workflow drafts, operation attempts, public receipts, and verified booking grants.
+Repositories isolate SQL from API/orchestration code. Startup runs ordered migrations and expires
+old active conversations.
+
+Conversation restoration removes obsolete pending cards, replaces completed drafts with receipts,
+and reconstructs a missing receipt from succeeded workflow state when necessary.
+
+### 5.9 Observability
+
+Logs use a JSON formatter and structured redaction. Sensitive keys, embedded email addresses,
+telephone numbers, and bearer tokens are removed. Turn failures log the exception type rather than
+returning private exception details to the browser.
+
+## 6. Main request flows
+
+### 6.1 Conversational read
+
+```mermaid
+sequenceDiagram
+    participant B as Browser widget
+    participant A as Chat API
+    participant O as Orchestrator
+    participant P as Provider / planner
+    participant T as Transition + tools
+    participant D as Dealership platform
+    participant S as SQLite
+
+    B->>A: text/action + current page context + clientMessageId
+    A->>S: authorize session and update page context
+    A->>O: serialized turn
+    O->>S: persist running turn + user message
+    O->>P: bounded context
+    P-->>O: one validated typed semantic plan
+    O->>T: deterministic transition and validated execution
+    T->>D: authoritative read
+    D-->>T: current business facts
+    T-->>O: closed ToolResult
+    O->>S: persist assistant response + completed turn
+    O-->>B: text + closed view payload
+```
+
+### 6.2 Private workshop lookup
+
+The widget renders an application-owned four-field form. It posts directly to the deterministic
+lookup endpoint rather than the ordinary turn endpoint. The proof values are validated in memory,
+sent to the protected dealership lookup, and excluded from messages, model input, workflow drafts,
+logs, and the saved form profile. Success stores only a safe booking snapshot and server-side record
+ID in a 30-minute verified grant.
+
+## 7. Data ownership
+
+| Data | Source of truth | Webchat responsibility |
+| --- | --- | --- |
+| Vehicles, offers, locations, hours, services, slots | Dealership platform | Fetch and normalize for a turn/view |
+| Business record status/reference | Dealership platform | Persist public receipt snapshot |
+| Conversations and messages | Webchat SQLite | Durable transcript and typed views |
+| Current workflow stage | Webchat SQLite | Deterministic transition state |
+| Draft fields and attempts | Webchat SQLite | Validate, confirm, deduplicate, execute |
+| Booking proof | Request memory only | Forward to lookup; never persist |
+| Verified booking authorization | Webchat SQLite | 30-minute conversation-scoped grant |
+| AI/dealership credentials | Environment | Server use only |
+| Conversation authorization | HttpOnly cookie + SQLite hash | Browser cannot read token |
+| Ordinary form profile | Browser localStorage | Prefill ordinary forms; exclude private lookup |
+
+## 8. Security controls
+
+| Threat | Current control |
+| --- | --- |
+| Credential exposure | Secrets remain in environment/server adapters |
+| Prompt injection | Page snapshots are labelled data; model exposes only a typed semantic planner |
+| Arbitrary tool execution | Domain-goal schema, deterministic transition router, registry allow-list, strict inputs |
+| Unconfirmed write | Stored draft plus explicit confirmation endpoint |
+| Duplicate create | Unique client action plus persisted idempotency key |
+| Cross-conversation access | Random cookie, SHA-256 session hash, conversation-scoped authorization |
+| Booking enumeration | Four-field deterministic lookup and generic not-found behavior |
+| Booking ID tampering | Server-side verified grant supplies internal record ID |
+| Model HTML/XSS | `textContent`, closed renderers, controlled vehicle links/images |
+| Sensitive logging | Structured key and pattern redaction |
+| Oversized/abusive requests | Schema limits, declared body limit, in-memory rate limit, bounded provider loop |
+
+## 9. Current resilience behavior
+
+- Duplicate turn IDs return the stored turn result.
+- Duplicate confirmation action IDs return the persisted attempt outcome.
+- A retryable platform failure returns a draft to `awaiting_confirmation`; final failures mark it
+  failed.
+- Provider timeout marks the turn `failed` with `LLM_TIMEOUT`.
+- Other orchestration failures are sanitized as `LLM_INVALID_RESPONSE`.
+- Service startup fails when required Azure settings are incomplete or production OpenAI settings
+  are missing.
+- Readiness currently reports database migration readiness only.
+
+## 10. Known limitations
+
+- Conversation locks and request-rate counters are in-process and therefore single-instance.
+- The dealership adapter has timeouts and normalized errors but no automatic retry/backoff.
+- Ambiguous workshop PATCH/DELETE outcomes are not automatically reconciled with a follow-up read.
+- Browser behavior is manually regression-tested; there is no installed automated browser runner.
+- The 64 KiB request limit relies on `Content-Length`; request bodies are not streamed through a
+  separate hard-cap reader.
+- SQLite is appropriate for this deployment but not a horizontally scaled multi-instance service.
+- Draft contact data is stored server-side for workflow execution; it is hidden from confirmation
+  summaries but does not yet have a separate early-cleanup job.
+- Conversation-response enforcement deliberately uses conservative application signals. Novel wording
+  that matches neither a deterministic route nor a strong business signal remains visible in
+  observe logs for future rule refinement.
+
+## 11. Verification status
+
+The current isolated webchat image passes:
+
+- 335 Pytest tests covering unit, integration, security, contract, workflow, provider, transition,
+  restoration, and API behavior;
+- Ruff checks for `webchat` and `tests`;
+- Node syntax checks for all widget ES modules;
+- 8 Node module tests covering scoped/restored business cards, confirmations, saved form profiles,
+  private lookup exclusion, and retry/recovery behavior;
+- package verification for nested `widget/core` and `widget/views` assets.
+
+Automated tests use mock transports and temporary SQLite databases; they do not require mutation of
+the supplied dealership source tree.
+
+## 12. Architectural decisions and trade-offs
+
+- **Separate webchat service:** creates another container but keeps browser and platform secrets
+  separated.
+- **Versioned domain-goal plan instead of model-selected business tools:** adds deterministic mapping code but
+  makes business routing inspectable and testable.
+- **Server-owned workflow drafts:** adds persistence and forms but makes confirmation and retries
+  explicit.
+- **Closed typed views:** trades arbitrary formatting for safer, predictable, accessible rendering.
+- **Repository and capability packages:** adds files but reduces multi-purpose classes and makes
+  dependencies directional.
+- **Deterministic local planner:** provides offline behavior through the same plan and execution
+  boundary, although rule-based language understanding remains less flexible than a hosted model.
+
+## 13. Documentation map
+
+- [`LLD.md`](./LLD.md): exact modules, endpoints, schemas, state machines, and tests.
+- [`diagrams/README.md`](./diagrams/README.md): architecture images and editable sources.
+- [`../webchat-service/README.md`](../webchat-service/README.md): service operation and module guide.
+- Folder-level `README.md` files under `webchat-service/`: ownership and file catalogues.
+
+Update this HLD whenever a trust boundary, external dependency, runtime container, persistence
+technology, provider contract, or write-safety rule changes.

@@ -1,6 +1,6 @@
 import pytest
 
-from webchat.orchestration.service_resolution import match_live_service
+from webchat.orchestration.tools.service_resolution import resolve_live_service
 
 SERVICES = [
     {
@@ -33,4 +33,15 @@ SERVICES = [
 def test_arbitrary_service_wording_resolves_against_live_catalogue(
     wording: str, service_id: str
 ) -> None:
-    assert match_live_service(SERVICES, wording)["id"] == service_id
+    resolution = resolve_live_service(SERVICES, wording)
+
+    assert resolution.status == "matched"
+    assert resolution.service is not None
+    assert resolution.service["id"] == service_id
+
+
+def test_unknown_service_is_distinct_from_an_ambiguous_match() -> None:
+    resolution = resolve_live_service(SERVICES, "Do you do car cleaning?")
+
+    assert resolution.status == "unsupported"
+    assert resolution.service is None

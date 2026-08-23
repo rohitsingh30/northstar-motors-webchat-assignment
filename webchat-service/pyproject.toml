@@ -26,7 +26,12 @@ where = ["."]
 
 [tool.setuptools.package-data]
 "webchat.persistence" = ["migrations/*.sql"]
-"webchat" = ["widget/*.js", "widget/*.css"]
+"webchat" = [
+  "widget/*.js",
+  "widget/*.css",
+  "widget/core/*.js",
+  "widget/views/*.js",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -8,16 +8,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .api.conversations import router as conversation_router
+from .api.errors import dealership_error_response
+from .api.restoration import ConversationRestorer
 from .api.security import SecurityMiddleware
 from .config import Settings, get_settings
 from .domain.workflows import WorkflowService
 from .integrations.contracts import LlmProvider
-from .integrations.dealership import DealershipClient
-from .integrations.llm import FakeLlmProvider
+from .integrations.dealership import DealershipClient, DealershipError
+from .integrations.fake_llm import FakeLlmProvider
 from .integrations.openai_provider import OpenAIProvider
 from .observability.logging import configure_logging
 from .orchestration.orchestrator import Orchestrator
-from .orchestration.tool_registry import ToolRegistry
+from .orchestration.planning.plan_policy import SemanticPlanPolicy
+from .orchestration.routing import DeterministicPlanRouter
+from .orchestration.tools.registry import ToolRegistry
 from .persistence.database import Database
 from .persistence.repositories import (
     ConversationRepository,
@@ -48,6 +52,9 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
         )
         app.state.dealership = dealership
         app.state.workflow_repository = WorkflowRepository(database)
+        app.state.restorer = ConversationRestorer(
+            app.state.messages, app.state.workflow_repository
+        )
         app.state.workflows = WorkflowService(app.state.workflow_repository, dealership)
         app.state.tools = ToolRegistry(dealership, app.state.workflows)
         selected_provider = provider
@@ -63,6 +70,12 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
                 runtime_settings.openai_api_key.get_secret_value(), runtime_settings.openai_model
             )
         selected_provider = selected_provider or FakeLlmProvider()
+        # Natural language always reaches the configured semantic provider first.
+        # Deterministic routing is only a safety net for rejected general responses.
+        semantic_plan_policy = SemanticPlanPolicy(
+            runtime_settings.semantic_plan_policy_mode,
+            DeterministicPlanRouter(),
+        )
         app.state.provider = selected_provider
         app.state.orchestrator = Orchestrator(
             app.state.messages,
@@ -70,6 +83,7 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
             selected_provider,
             app.state.tools,
             app.state.conversations,
+            semantic_plan_policy=semantic_plan_policy,
         )
         app.state.database_ready = True
         yield
@@ -79,6 +93,7 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
             await close_provider()
 
     application = FastAPI(title="Northstar Motors Webchat", lifespan=lifespan)
+    application.add_exception_handler(DealershipError, dealership_error_response)
     application.add_middleware(SecurityMiddleware, settings=runtime_settings)
     application.add_middleware(
         CORSMiddleware,

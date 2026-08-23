@@ -14,12 +14,14 @@ class DealershipError(Exception):
         message: str,
         retryable: bool = False,
         field_errors: dict[str, str] | None = None,
+        recovery: dict[str, Any] | None = None,
     ):
         super().__init__(message)
         self.status = status
         self.code = code
         self.retryable = retryable
         self.field_errors = field_errors or {}
+        self.recovery = recovery or {}
 
 
 class DealershipClient:
@@ -189,6 +191,11 @@ class DealershipClient:
     async def lookup_workshop_booking(self, body: dict[str, Any]) -> dict[str, Any]:
         return await self._request(
             "POST", "/api/workshop-bookings/lookup", body=body, protected=True
+        )
+
+    async def get_workshop_booking(self, record_id: str) -> dict[str, Any]:
+        return await self._request(
+            "GET", f"/api/workshop-bookings/{record_id}", protected=True
         )
 
     async def update_workshop_booking(self, record_id: str, body: dict[str, Any]) -> dict[str, Any]:

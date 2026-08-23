@@ -4,14 +4,18 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Environment-owned settings; secret values are never serialized to clients."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     environment: Literal["development", "test", "production"] = "development"
     llm_provider: Literal["openai", "azure"] = "openai"
@@ -22,11 +26,17 @@ class Settings(BaseSettings):
     azure_openai_deployment: str | None = None
     northstar_api_key: SecretStr = SecretStr("northstar-local-development")
     northstar_base_url: str = "http://dealership-platform:4010"
-    webchat_port: int = 4020
     webchat_database_path: Path = Path("/data/webchat.sqlite3")
     webchat_cookie_secure: bool = False
     webchat_allowed_origin: str = "http://localhost:4173"
     webchat_retention_days: int = 30
+    semantic_plan_policy_mode: Literal["off", "observe", "enforce"] = Field(
+        default="observe",
+        validation_alias=AliasChoices(
+            "SEMANTIC_PLAN_POLICY_MODE",
+            "GENERAL_RESPONSE_GATE_MODE",
+        ),
+    )
     log_level: str = "INFO"
 
     @field_validator("openai_model", "northstar_base_url")

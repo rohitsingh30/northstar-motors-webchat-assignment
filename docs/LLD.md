@@ -1,756 +1,807 @@
 # Northstar Motors AI Webchat — Low-Level Design
 
-## 1. Purpose
+## 1. Purpose and status
 
-This document specifies the code structure, internal contracts, persistence schema, workflow state
-machines, validation, integration behaviour, and test plan for the design in `HLD.md`.
+This document is the code-level specification for the **current** `webchat-service`. It describes
+module ownership, runtime wiring, browser behavior, API contracts, orchestration, tool dispatch,
+workflow state, SQLite tables, validation, and verification.
 
-## 2. Proposed repository structure
+For system boundaries and architectural decisions, read [`HLD.md`](./HLD.md). Folder-level file
+catalogues live in the `README.md` files under [`../webchat-service`](../webchat-service/README.md).
+
+## 2. Current service structure
 
 ```text
-northstar-motors-webchat/
-├── compose.yaml
-├── .env.example
-├── dealership-platform/              # supplied; do not change behaviour/data
-├── dealership-website/
-│   └── index.html                     # one external widget script tag only
-└── webchat-service/
-    ├── Dockerfile
-    ├── pyproject.toml
-    ├── webchat/
-    │   ├── main.py                    # application factory/lifespan
-    │   ├── config.py                  # environment validation
-    │   ├── api/
-    │   │   ├── conversations.py       # public HTTP routes
-    │   │   ├── models.py              # browser request/response schemas
-    │   │   └── errors.py
-    │   ├── domain/
-    │   │   ├── models.py              # messages, turns, view models
-    │   │   ├── workflows.py           # draft/confirm state machines
-    │   │   ├── policy.py              # allowed tools and mutation gates
-    │   │   └── business_semantics.py  # deterministic result/error mapping
-    │   ├── orchestration/
-    │   │   ├── orchestrator.py
-    │   │   ├── prompt.py
-    │   │   ├── tool_registry.py
-    │   │   └── context.py
-    │   ├── tools/
-    │   │   ├── catalogue.py
-    │   │   ├── sales.py
-    │   │   ├── workshop.py
-    │   │   └── contact.py
-    │   ├── integrations/
-    │   │   ├── dealership.py
-    │   │   ├── dealership_models.py
-    │   │   ├── llm.py
-    │   │   └── openai_provider.py
-    │   ├── persistence/
-    │   │   ├── database.py
-    │   │   ├── migrations/
-    │   │   └── repositories.py
-    │   ├── observability/
-    │   │   ├── logging.py
-    │   │   └── redaction.py
-    │   └── widget/                    # service-hosted browser bundle
-    │       ├── embed.js               # one-script entry point
-    │       ├── northstar-chat-widget.js
-    │       ├── webchat.js
-    │       ├── webchat-api.js
-    │       ├── webchat-view.js
-    │       ├── webchat-context.js
-    │       └── webchat.css
-    └── tests/
-        ├── unit/
-        ├── integration/
-        ├── contract/
-        └── browser/
+webchat-service/
+├── Dockerfile
+├── pyproject.toml
+├── README.md
+├── webchat/
+│   ├── main.py
+│   ├── config.py
+│   ├── api/
+│   │   ├── conversations.py
+│   │   ├── errors.py
+│   │   ├── models.py
+│   │   ├── restoration.py
+│   │   └── security.py
+│   ├── domain/
+│   │   ├── business_semantics.py
+│   │   ├── models.py
+│   │   └── workflows.py
+│   ├── integrations/
+│   │   ├── contracts.py
+│   │   ├── dealership.py
+│   │   ├── openai_provider.py
+│   │   └── fake_llm/{planner,provider}.py
+│   ├── observability/
+│   │   ├── logging.py
+│   │   └── redaction.py
+│   ├── orchestration/
+│   │   ├── orchestrator.py
+│   │   ├── context/builder.py
+│   │   ├── planning/{ontology,plan_policy,prompt,tool_routes,transitions,turn_plan}.py
+│   │   ├── presentation/{response,suggestions}.py
+│   │   ├── routing/{context,parsers,responses,router}.py
+│   │   ├── routing/routes/{base,support,vehicle,workshop}.py
+│   │   ├── tools/
+│   │   │   ├── actions.py
+│   │   │   ├── business_information.py
+│   │   │   ├── catalog.py
+│   │   │   ├── contracts.py
+│   │   │   ├── forms.py
+│   │   │   ├── helpers.py
+│   │   │   ├── inputs.py
+│   │   │   ├── registry.py
+│   │   │   ├── result.py
+│   │   │   ├── service_resolution.py
+│   │   │   ├── vehicles.py
+│   │   │   ├── workflows.py
+│   │   │   └── workshop.py
+│   │   └── turns/provider_loop.py
+│   ├── persistence/
+│   │   ├── database.py
+│   │   ├── repositories.py
+│   │   └── migrations/*.sql
+│   └── widget/
+│       ├── embed.js
+│       ├── northstar-chat-widget.js
+│       ├── webchat.js
+│       ├── webchat.css
+│       ├── core/{api,context,dom,form-profile,format}.js
+│       └── views/{message,message-content,suggestions,vehicle}.js
+└── tests/
+    ├── test_health.py
+    ├── contract/
+    ├── integration/
+    └── unit/
 ```
 
-## 3. Browser application design
+There is no parallel legacy tool package and no flat-module compatibility layer. The
+`orchestration` subpackages are the canonical import paths.
 
-### 3.1 State model
+## 3. Runtime assembly
+
+`webchat.main.create_app()` is the composition root.
+
+During lifespan startup it:
+
+1. configures structured logging;
+2. opens/migrates SQLite and expires old conversations;
+3. constructs conversation, message, turn, and workflow repositories;
+4. constructs `DealershipClient`;
+5. constructs `ConversationRestorer`, `WorkflowService`, and `ToolRegistry`;
+6. selects Azure OpenAI, OpenAI, or `FakeLlmProvider`;
+7. configures post-provider `SemanticPlanPolicy` with deterministic fallback routing;
+8. constructs `Orchestrator` and marks database readiness.
+
+Shutdown closes owned dealership and provider HTTP clients.
+
+### 3.1 Provider selection
+
+```text
+LLM_PROVIDER=azure
+    └── Azure settings must all be present → OpenAIProvider(azure=True)
+
+LLM_PROVIDER=openai + OPENAI_API_KEY present
+    └── OpenAIProvider
+
+LLM_PROVIDER=openai + no key + non-production
+    └── FakeLlmProvider(DeterministicTurnPlanner)
+
+production + no OpenAI key
+    └── configuration error during app creation
+```
+
+## 4. Package dependency direction
+
+```mermaid
+flowchart TD
+    Main[main.py composition root] --> API[api]
+    Main --> Integrations[integrations]
+    Main --> Orchestration[orchestration]
+    Main --> Persistence[persistence]
+    API --> Domain[domain]
+    API --> Orchestration
+    API --> Persistence
+    Orchestration --> Domain
+    Orchestration --> Integrations
+    Orchestration --> Persistence
+    Domain --> Integrations
+    Domain --> Persistence
+    Integrations --> Contracts[integration contracts]
+    Widget[widget ES modules] --> API
+```
+
+The composition root supplies concrete dependencies. Focused `Protocol` interfaces in context,
+tools, fake planning, and restoration keep consumers dependent on the behavior they require.
+
+## 5. Browser widget
+
+### 5.1 Module ownership
+
+| Module | Responsibility |
+| --- | --- |
+| `embed.js` | Mount one widget and expose the small `window.NorthstarChat` host API |
+| `northstar-chat-widget.js` | Define the web component, Shadow DOM shell, and host layout behavior |
+| `webchat.js` | UI state, conversation lifecycle, events, API coordination, and inline workflows |
+| `core/api.js` | Credentialed fetch client and safe API error normalization |
+| `core/context.js` | Bounded page/context extraction and host-supplied context validation |
+| `core/dom.js` | Safe text-element construction |
+| `core/form-profile.js` | Save/prefill ordinary form fields; exclude private booking lookup |
+| `core/format.js` | GBP formatting from integer pence |
+| `views/message.js` | Closed renderer registry, forms, confirmations, slots, receipts, business cards |
+| `views/message-content.js` | Safe paragraph/list-like assistant text presentation |
+| `views/suggestions.js` | Typed suggestion/action buttons |
+| `views/vehicle.js` | Vehicle cards, availability, and comparison table |
+| `webchat.css` | Shadow DOM layout, responsive states, cards, forms, and accessibility styling |
+
+### 5.2 Browser state
+
+Controller state is closure-owned rather than a global store:
 
 ```js
 {
-  lifecycle: "closed" | "open",
-  connection: "idle" | "sending" | "reconnecting" | "unavailable" | "error",
-  conversationId: string | null,
-  messages: MessageView[],
-  pendingTurnId: string | null,
-  unreadCount: number,
-  pageContext: {
-    path: string,
-    section: "home" | "vehicles" | "offers" | "locations" | "service" | "unknown",
-    vehicleId: string | null,
-    title: string
-  }
+  conversationId,
+  initialized,
+  pendingClientId,
+  unreadCount,
+  progressTimer,
+  panel.open
 }
 ```
 
-Only `conversationId` and the open/closed preference are stored in local storage. Conversation
-authorization uses an `HttpOnly`, `SameSite=Lax` cookie that browser JavaScript cannot read. Local
-cross-origin requests are restricted to `WEBCHAT_ALLOWED_ORIGIN` with credentials; production may
-use a same-origin edge route. The transcript restored from the backend is authoritative.
+`localStorage` keys:
 
-### 3.2 UI composition
+| Key | Value |
+| --- | --- |
+| `northstarConversationId` | Opaque current conversation UUID |
+| `northstarChatOpen` | String preference used to reopen the panel |
+| `northstarFormProfileV1` | Ordinary reusable form values, capped to 2,000 characters each |
 
-- `WebchatLauncher`: accessible name, online/unavailable indicator, unread badge.
-- `WebchatPanel`: labelled dialog region, heading, close/new-conversation controls.
-- `Transcript`: ordered message list and polite status live region.
-- `Message`: user/assistant/system status variant with timestamp.
-- `VehicleCard` / `OfferCard`: closed schemas, safe text, allow-listed links.
-- `ChoiceList`: buttons that submit a stable choice ID plus visible label.
-- `PrivateBookingLookupCard`: four labelled identity fields submitted directly to the deterministic
-  lookup endpoint; values are cleared after the request and never added to the transcript.
-- `ConfirmationCard`: material operation fields, edit/cancel/confirm actions.
-- `ReceiptCard`: status, public reference, selected details, and safe next steps.
-- `Composer`: text area, send/retry states, character counter near limit.
+The form profile excludes hidden/password/file/button fields, disabled/read-only fields, internal
+IDs, and every field inside `[data-private-lookup]`. Server-originated form values marked with
+`data-profile-value-source="server"` are not overwritten.
 
-All rendering uses `textContent` and explicit DOM attributes. Vehicle URLs are constructed from a
-validated `veh-` identifier rather than accepted as model HTML.
+### 5.3 Page-context payload
 
-### 3.3 Page context
+`core/context.js` returns:
 
-`webchat-context.js` reads:
-
-- `window.location.pathname`;
-- known hash/section IDs;
-- the `vehicle` query parameter only when it matches `^veh-[0-9]{3}$`;
-- a constant/allow-listed page title.
-
-An optional host may call the public `NorthstarChat.setContext` API. Without host integration, the
-widget derives context from the safe URL fields above. It never copies arbitrary visible page text
-into the model context.
-
-### 3.4 Network behaviour
-
-The turn endpoint is synchronous and returns one complete JSON response with HTTP 200. Immediately
-after submission, the UI adds the user's message, disables duplicate submission, and announces a
-generic “Northstar is working on that” progress state. It replaces that state when the response
-arrives or shows a retryable error after the bounded request timeout.
-
-On an ambiguous network failure, the browser restores the conversation before retrying. A retry
-uses the same `clientMessageId`, so the backend returns the already-running or completed turn rather
-than executing it again. Confirmed actions use the same rule with `clientActionId`.
-
-## 4. Public webchat API
-
-All endpoints are under `/api/chat/v1`. The local widget calls the published service using a
-credentialed, explicitly allow-listed origin; production may use a same-origin edge route. JSON
-bodies reject unknown security-sensitive fields. Conversation endpoints require the random
-`northstar_chat` authorization cookie after creation. State-changing requests validate the exact
-configured `Origin` header and accept JSON only.
-
-### 4.1 Create conversation
-
-`POST /api/chat/v1/conversations`
-
-Request:
-
-```json
+```js
 {
-  "pageContext": {
-    "path": "/",
-    "section": "vehicles",
-    "vehicleId": "veh-001",
-    "title": "Used Cars | Northstar Motors"
-  }
+  path, section, vehicleId, title,
+  heading, description, pageText, dialogText,
+  controls: [{ name, label, value }],
+  entities: [{ type, id, label, attributes }]
 }
 ```
 
-Response `201`:
+Sources include the current URL, visible section, bounded `innerText`, visible controls, elements
+with `data-chat-entity`, an open host dialog, and optional host calls to
+`NorthstarChat.setContext()`. Identifiers and lengths are allow-listed. The backend labels these
+snapshots as data, not instructions; dynamic facts still require dealership tools.
 
-```json
-{
-  "conversationId": "uuid",
-  "createdAt": "2026-08-21T10:00:00Z",
-  "messages": []
-}
-```
+Limits match `api.models.PageContext`: 6,000 characters of page text, 3,000 dialog characters,
+30 controls, 50 entities, and 24 scalar attributes per entity.
 
-The response sets `northstar_chat={random-token}; HttpOnly; SameSite=Lax; Path=/api/chat` and adds
-`Secure` outside local HTTP development. Only a SHA-256/HMAC-derived token hash is stored by the
-service.
+### 5.4 Rendering contract
 
-### 4.2 Restore conversation
+The widget never assigns model content to `innerHTML`. The component template and CSS are static;
+runtime content is created with DOM APIs and `textContent`. Rich output is selected by a registry
+of application-owned view types, including:
 
-`GET /api/chat/v1/conversations/{conversationId}`
+- vehicle list, availability, and comparison;
+- offer, dealership, opening-hours, service, and workshop-location cards;
+- test-drive/workshop slot pickers;
+- suggestion lists;
+- draft and confirmation forms;
+- private booking lookup and verified booking details;
+- part-exchange forms/estimate;
+- receipts and business information.
 
-Returns metadata, ordered messages, safe typed view payloads, and a pending confirmation if one is
-still valid. It never returns model tool arguments, idempotency keys, lookup proofs, or internal
-record IDs.
+## 6. Public HTTP API
 
-### 4.3 Send message
+All chat routes are under `/api/chat/v1`.
 
-`POST /api/chat/v1/conversations/{conversationId}/turns`
-
-Request:
-
-```json
-{
-  "clientMessageId": "uuid",
-  "text": "Can I test drive this next Saturday?",
-  "pageContext": {
-    "path": "/",
-    "section": "vehicles",
-    "vehicleId": "veh-001",
-    "title": "Used Cars | Northstar Motors"
-  }
-}
-```
-
-Constraints: UTF-8 text, trimmed length 1–4000, valid client UUID, allow-listed context, maximum one
-active turn per conversation. Reusing `clientMessageId` returns the original turn.
-
-Response `200` contains:
-
-```json
-{
-  "turnId": "uuid",
-  "status": "completed",
-  "messages": []
-}
-```
-
-If the same `clientMessageId` is still running, the endpoint waits for that existing turn within
-the normal request timeout. If it already completed, the stored response is returned.
-
-### 4.4 Confirm or cancel a draft
-
-- `POST /api/chat/v1/conversations/{conversationId}/drafts/{draftId}/confirm`
-- `POST /api/chat/v1/conversations/{conversationId}/drafts/{draftId}/cancel`
-
-The confirm request contains `clientActionId` only. It cannot override draft fields. A field edit is
-a new chat turn that updates the draft and requires a new confirmation.
-
-### 4.5 Submit private workshop-booking lookup
-
-`POST /api/chat/v1/conversations/{conversationId}/workshop-booking-lookup`
-
-```json
-{
-  "reference": "WORK-10001",
-  "lastName": "Taylor",
-  "registration": "AB12 CDE",
-  "phone": "07700900123"
-}
-```
-
-This endpoint is submitted by a structured sensitive-input card. It deterministically validates
-and forwards the four values to the platform lookup without adding them to a message, workflow
-draft, model request, or log. A successful response stores a short-lived verified grant and returns
-only the safe booking view. A mismatch returns the same generic `BOOKING_NOT_FOUND` presentation
-regardless of which value differed. The ordinary composer does not collect these four values while
-this card is active.
-
-### 4.6 Delete/local reset
-
-`DELETE /api/chat/v1/conversations/{conversationId}` marks the conversation for deletion and
-invalidates its token, and clears the authorization cookie with `Max-Age=0`. It does not delete
-dealership business records.
-
-### 4.7 Health
-
-- `GET /health/live`: process and event-loop health.
-- `GET /health/ready`: migration/database readiness and configuration validity; dependency status
-  is reported without leaking credentials.
-
-## 5. Domain models
-
-### 5.1 Message and view models
-
-```python
-class Message:
-    id: UUID
-    conversation_id: UUID
-    turn_id: UUID | None
-    role: Literal["user", "assistant", "status"]
-    text: str
-    view_type: Literal[
-        "none", "vehicle_list", "vehicle_comparison", "offer_list",
-        "slot_list", "choice_list", "confirmation", "receipt", "error"
-    ]
-    view_payload: dict | None
-    created_at: datetime
-```
-
-View payloads use versioned discriminated schemas and contain only safe customer-facing fields.
-
-### 5.2 Workflow draft
-
-```python
-class WorkflowDraft:
-    id: UUID
-    conversation_id: UUID
-    kind: OperationKind
-    state: Literal["collecting", "awaiting_confirmation", "executing", "succeeded", "failed", "cancelled", "expired"]
-    fields: dict
-    material_hash: str | None
-    idempotency_key: str | None
-    platform_record_id: str | None
-    public_reference: str | None
-    platform_status: str | None
-    last_error_code: str | None
-    version: int
-    created_at: datetime
-    updated_at: datetime
-    expires_at: datetime
-```
-
-`fields` is validated against a schema selected by `kind`; it is not treated as arbitrary trusted
-JSON. Secret lookup proof values use a separate short-retention record.
-
-### 5.3 Operation kinds and required fields
-
-| Kind | Required material fields |
-| --- | --- |
-| `sales_enquiry` | dealership ID, optional vehicle ID, enquiry type, message, contact |
-| `test_drive` | returned slot ID, contact, optional notes |
-| `vehicle_interest` | reserved vehicle ID, contact, optional notes |
-| `callback` | dealership ID, department, optional vehicle ID/time, reason, contact |
-| `workshop_booking` | returned slot ID, registration, mileage, contact, optional notes |
-| `workshop_amend` | verified grant ID plus at least one of returned slot ID/mileage/notes |
-| `workshop_cancel` | verified grant ID and current public booking summary |
-| `dealership_message` | dealership ID, department, subject, message, contact method, contact |
-| `part_exchange` | dealership ID, registration, mileage, condition, contact |
-
-Contact follows the platform `Contact` schema: first name, last name, email, and phone. The
-webchat mirrors platform validation and treats the platform response as final.
-
-## 6. Persistence schema
-
-SQLite uses foreign keys, WAL mode, busy timeout, UTC timestamps, and explicit migrations.
-
-### `conversations`
-
-| Column | Type/constraint |
-| --- | --- |
-| `id` | TEXT UUID primary key |
-| `token_hash` | BLOB unique, not null |
-| `status` | TEXT: active/deleted/expired |
-| `summary` | TEXT nullable |
-| `last_page_context_json` | TEXT validated JSON |
-| `created_at`, `updated_at`, `expires_at` | UTC TEXT not null |
-
-### `messages`
-
-| Column | Type/constraint |
-| --- | --- |
-| `id` | TEXT UUID primary key |
-| `conversation_id` | FK with delete cascade |
-| `turn_id` | nullable FK |
-| `sequence` | INTEGER; unique per conversation |
-| `role` | checked TEXT |
-| `text` | TEXT with application length limit |
-| `view_type`, `view_payload_json`, `created_at` | typed metadata |
-
-### `turns`
-
-| Column | Type/constraint |
-| --- | --- |
-| `id` | TEXT UUID primary key |
-| `conversation_id` | FK |
-| `client_message_id` | TEXT; unique per conversation |
-| `status` | running/completed/failed |
-| `correlation_id` | TEXT unique |
-| `error_category` | nullable sanitized code |
-| `started_at`, `completed_at` | UTC TEXT |
-
-### `workflow_drafts`
-
-Contains the `WorkflowDraft` fields above. `(conversation_id, id, version)` and compare-and-swap
-updates prevent double confirmation. A partial unique index permits at most one executing attempt
-for a draft.
-
-### `operation_attempts`
-
-| Column | Type/constraint |
-| --- | --- |
-| `id` | TEXT UUID primary key |
-| `draft_id` | FK |
-| `conversation_id` | FK |
-| `client_action_id` | TEXT not null; unique with `conversation_id` |
-| `idempotency_key` | TEXT nullable; unique when present and required for record creation |
-| `request_fingerprint` | TEXT not null |
-| `state` | prepared/sent/succeeded/failed/unknown |
-| `platform_record_id`, `public_reference`, `platform_status` | nullable result snapshot |
-| `error_code`, `retryable`, timestamps | sanitized outcome metadata |
-
-### `verified_booking_grants`
-
-| Column | Type/constraint |
-| --- | --- |
-| `id` | TEXT UUID primary key |
-| `conversation_id` | FK |
-| `booking_record_id` | TEXT stored server-side only |
-| `booking_reference` | TEXT |
-| `booking_snapshot_json` | safe normalized fields |
-| `expires_at`, `revoked_at` | short-lived authorization state |
-
-The raw surname, registration, and phone used for lookup exist only in the validated request and
-upstream call. They are not stored in messages, drafts, grants, model input, or logs. The sensitive
-card sends all four fields in one request, so there is no resumable partial proof to persist. The
-privacy notice explains that personal information voluntarily entered into the ordinary chat
-composer remains subject to normal transcript retention.
-
-## 7. Orchestration algorithm
-
-For each accepted turn:
-
-1. Authorize the conversation cookie and obtain a per-conversation lock.
-2. Deduplicate `clientMessageId` and persist the user message/turn.
-3. Normalize page context and resolve explicit selected entities.
-4. Load the compact conversation summary, recent messages, active draft, and safe entity context.
-5. Build the model request with policy, business rules, current date/timezone, and allowed tools.
-6. Execute at most 6 tool-loop iterations and at most 8 tool calls, with no more than 3 catalogue
-   searches in one turn.
-7. For each proposal, validate the exact tool schema and apply policy:
-   - read tools may execute;
-   - draft tools may update validated workflow state;
-   - mutations require the dedicated stored-draft confirmation path;
-   - booking management requires a valid verified grant.
-8. Normalize tool output and return only the fields needed for response composition.
-9. Validate the final response envelope and typed view models.
-10. Persist the assistant message, mark the turn complete, and release the lock.
-
-The HTTP handler awaits this work but shields the persisted turn task from client-disconnect
-cancellation. A duplicate request with the same `clientMessageId` awaits the same in-process task
-or returns its stored result. On service restart, an orphaned `running` turn becomes `failed` and
-can be safely retried with the same ID; confirmed record creation remains protected by its stored
-operation attempt and idempotency key.
-
-If the model returns invalid arguments twice for the same request, the orchestrator asks a safe
-clarifying question or returns a controlled error instead of guessing.
-
-## 8. Internal tool catalogue
-
-### 8.1 Read tools
-
-| Internal tool | Platform operation | Important policy |
+| Method and path | Request model | Purpose |
 | --- | --- | --- |
-| `search_vehicles` | `GET /api/vehicles` | Allow-listed filters; pence integers; page size capped at 6 for chat |
-| `get_vehicle` | `GET /api/vehicles/{id}` | Validate stable vehicle ID |
-| `get_vehicle_availability` | `GET /api/vehicles/{id}/availability` | Required before dependent action |
-| `list_offers` / `get_offer` | `GET /api/offers...` | Do not calculate missing terms |
-| `list_dealerships` / `get_dealership` | dealership GETs | Public fields only |
-| `get_opening_hours` | opening-hours GET | Preserve department and exceptions |
-| `list_service_types` | `GET /api/service-types` | Return only platform-supported services |
-| `list_test_drive_slots` | `GET /api/test-drive-slots` | Optional dealership/vehicle/date range |
-| `list_workshop_locations` | `GET /api/workshop-locations` | Public read |
-| `list_workshop_slots` | `GET /api/workshop-availability` | Dealership/service/date range |
-| `get_business_information` | `GET /api/business-information` | Select relevant notice without paraphrasing away qualification |
+| `GET /vehicle-images/{vehicleId}` | path validation | Proxy an approved platform vehicle image |
+| `POST /conversations` | `CreateConversationRequest` | Create a conversation in the current/new browser session |
+| `GET /conversations` | cookie | List conversations belonging to the browser session |
+| `GET /conversations/{id}` | cookie | Restore messages reconciled with workflow state |
+| `DELETE /conversations/{id}` | cookie | Soft-delete one conversation |
+| `POST /conversations/{id}/turns` | `SendTurnRequest` | Execute/deduplicate one text or typed-action turn |
+| `POST /conversations/{id}/drafts/{draftId}/confirm` | `ConfirmDraftRequest` | Confirm exactly the stored draft |
+| `POST /conversations/{id}/drafts/{draftId}/cancel` | empty JSON | Cancel a collecting/awaiting draft |
+| `POST /conversations/{id}/test-drive-options` | `TestDriveOptionsRequest` | Return live slots for a selected vehicle |
+| `POST /conversations/{id}/test-drive-drafts` | `TestDriveDraftRequest` | Prepare a validated test-drive draft |
+| `POST /conversations/{id}/workshop-options` | `WorkshopOptionsRequest` | Return live slots for a selected service/location |
+| `POST /conversations/{id}/workshop-drafts` | `WorkshopDraftRequest` | Prepare a workshop booking draft |
+| `POST /conversations/{id}/part-exchange-drafts` | `PartExchangeDraftRequest` | Prepare a part-exchange follow-up draft |
+| `POST /conversations/{id}/part-exchange-estimates` | `PartExchangeEstimateRequest` | Get an indicative estimate without contact data |
+| `POST /conversations/{id}/callback-drafts` | `CallbackDraftRequest` | Prepare a callback draft |
+| `POST /conversations/{id}/sales-enquiry-drafts` | `SalesEnquiryDraftRequest` | Prepare a sales enquiry draft |
+| `POST /conversations/{id}/vehicle-interest-drafts` | `VehicleInterestDraftRequest` | Prepare reserved-vehicle interest |
+| `POST /conversations/{id}/dealership-message-drafts` | `DealershipMessageDraftRequest` | Prepare a dealership message |
+| `POST /conversations/{id}/workshop-amendment-options` | empty JSON | Return current alternatives for a verified booking |
+| `POST /conversations/{id}/workshop-amendment-drafts` | `WorkshopAmendDraftRequest` | Prepare a verified amendment draft |
+| `POST /conversations/{id}/workshop-booking-lookup` | `BookingLookupRequest` | Verify private proof and optionally continue to amend/cancel |
+| `POST /conversations/{id}/workshop-existing-action` | `WorkshopExistingActionRequest` | Continue a verified booking to amend/cancel |
 
-### 8.2 Workflow tools
+Health endpoints are `/health/live` and `/health/ready`. Readiness currently checks database startup
+state only.
 
-- `prepare_sales_enquiry`
-- `prepare_test_drive`
-- `prepare_vehicle_interest`
-- `prepare_callback`
-- `prepare_workshop_booking`
-- `request_workshop_booking_lookup_form`
-- `prepare_workshop_amendment`
-- `prepare_workshop_cancellation`
-- `prepare_dealership_message`
-- `prepare_part_exchange`
+### 6.1 Conversation authorization
 
-Prepare tools validate and store drafts. They return `missingFields`, a safe summary, and either
-`collecting` or `awaiting_confirmation`. They do not call a write endpoint.
+Conversation creation reuses a valid session cookie or creates a 32-byte URL-safe token. The cookie
+is `HttpOnly`, `SameSite=Lax`, scoped to `/api/chat`, and optionally `Secure`. All conversation
+routes call `_authorize`; failure returns `404`.
 
-`confirm_draft` is application-owned and invoked by the confirmation endpoint, not exposed as a
-free-form model tool. The booking-lookup tool only renders the private form; the dedicated endpoint
-performs the actual lookup without sending proof values through the LLM.
+Multiple conversations can share the same `session_hash`, enabling the recent-chat list. Soft
+deletion changes status and invalidates the legacy per-conversation token hash; it does not delete
+dealership records.
 
-## 9. Workflow state machine
+### 6.2 Request validation
 
-```mermaid
-stateDiagram-v2
-    [*] --> Collecting
-    Collecting --> Collecting: add/correct fields
-    Collecting --> AwaitingConfirmation: complete and valid
-    AwaitingConfirmation --> Collecting: material field changed
-    AwaitingConfirmation --> Cancelled: user cancels
-    AwaitingConfirmation --> Executing: matching draft confirmed
-    Executing --> Succeeded: platform accepts
-    Executing --> Failed: non-retryable error
-    Executing --> AwaitingConfirmation: recoverable business change
-    Executing --> Executing: same-key safe retry
-    Collecting --> Expired: retention timeout
-    AwaitingConfirmation --> Expired: retention timeout
-```
+All request models use `extra="forbid"`. Important limits include:
 
-The material hash is a canonical JSON hash of operation kind plus normalized material fields.
-Whitespace/case normalization is limited to fields whose business meaning permits it. The exact
-canonical request fingerprint is stored beside the idempotency key.
+- chat text: trimmed, non-blank, maximum 4,000 characters;
+- stable vehicle ID: `veh-[0-9]{3}`;
+- test-drive slot: `td-slot-[0-9]{4}`;
+- workshop slot: `ws-slot-[0-9]{4}`;
+- contact names: trimmed, at least two characters, no digits;
+- email: bounded application regex, maximum 254;
+- UK phone: normalized to `0...`, then validated as `01` landline or `07` mobile;
+- mileage: non-negative integer with request-specific upper bound;
+- free text and identifiers: explicit maximum lengths;
+- typed actions: exact action-specific identifier set, no extra identifier combination.
 
-## 10. Detailed business flows
+## 7. Turn orchestration
 
-### 10.1 Vehicle search and refinement
+![AI turn orchestration](./diagrams/ai-turn-orchestration.svg)
 
-The orchestrator keeps a `vehicle_search_context` with supported filters and last result IDs. A
-follow-up such as “make them electric” updates `fuelType`; “start over” clears constraints. The
-model cannot filter a result by facts that are absent from platform data without explaining that
-limitation.
+### 7.1 Turn lifecycle
 
-Result cards resolve image paths against the configured platform public base URL and website links
-against the configured website base URL. URL construction validates both the scheme/host config
-and record ID.
-
-### 10.2 Test drive
-
-1. Resolve vehicle and call current availability.
-2. If available, query slots; if reserved/sold, apply documented alternative actions.
-3. Store the chosen returned slot ID and collect contact/notes.
-4. Recheck material summary and request confirmation.
-5. Persist UUID idempotency key, then `POST /api/test-drive-bookings` with `X-API-Key`.
-6. On `201`, show status `confirmed`, reference, vehicle, location, and appointment.
-7. On `SLOT_UNAVAILABLE`, mark the old slot invalid and offer a new search.
-8. On timeout, retry identical body/key or restore the attempt before allowing a new action.
-
-### 10.3 Reserved interest and sold vehicles
-
-Immediately before interest registration, availability must be `reserved`. An available vehicle
-does not accept interest; offer enquiry/test drive instead. A sold vehicle may still create a
-sales enquiry but not a test drive or interest record.
-
-### 10.4 Workshop booking
-
-1. Resolve a platform service type and workshop location.
-2. Query current returned slots for an explicit date range.
-3. Collect slot, registration, non-negative integer mileage, contact, and notes.
-4. Confirm the normalized registration, mileage, service, dealership, and appointment.
-5. Persist idempotency key and create the booking.
-6. Report only the platform's `confirmed` outcome and returned reference.
-
-Zero Bolton slots during the first seven seeded days is an empty success, not an outage.
-
-### 10.5 Lookup, amend, and cancel
-
-1. Render the private lookup card and submit reference, surname, registration, and phone to the
-   dedicated deterministic webchat endpoint.
-2. Validate in memory and call `POST /api/workshop-bookings/lookup` server-side without persisting
-   or sending the proof values to the model.
-3. For any mismatch, return the same generic not-found response and apply attempt rate limits.
-4. On success, create a short-lived verified grant and show the safe booking snapshot.
-5. Amendment requires the grant and a changed allowed field. A new slot must come from a current
-   availability response. Confirm before `PATCH`.
-6. Cancellation shows current booking details and requires confirmation before `DELETE`.
-7. `SLOT_UNAVAILABLE` during amendment leaves the stored snapshot/original booking unchanged.
-8. Revoke/update the grant after cancellation or expiry.
-
-### 10.6 Part exchange
-
-Validate condition as `excellent`, `good`, or `fair`, and mileage as non-negative. After confirmed
-creation, format `estimateLowPence` and `estimateHighPence` using `en-GB` GBP currency semantics and
-include the returned qualification/notices. Do not label the value a guaranteed offer.
-
-## 11. Dealership adapter contract
-
-```python
-class DealershipClient(Protocol):
-    async def list_dealerships(self) -> list[Dealership]: ...
-    async def get_dealership(self, dealership_id: str) -> Dealership: ...
-    async def get_opening_hours(self, dealership_id: str) -> OpeningHours: ...
-    async def search_vehicles(self, query: VehicleSearch) -> Page[Vehicle]: ...
-    async def get_vehicle(self, vehicle_id: str) -> Vehicle: ...
-    async def get_vehicle_availability(self, vehicle_id: str) -> Availability: ...
-    async def list_offers(self, query: OfferSearch) -> list[Offer]: ...
-    async def get_offer(self, offer_id: str) -> Offer: ...
-    async def list_service_types(self) -> list[ServiceType]: ...
-    async def list_test_drive_slots(self, query: SlotSearch) -> list[TestDriveSlot]: ...
-    async def create_sales_enquiry(self, body: SalesEnquiryCreate, key: str) -> OperationReceipt: ...
-    async def create_test_drive(self, body: TestDriveCreate, key: str) -> OperationReceipt: ...
-    async def create_vehicle_interest(self, body: InterestCreate, key: str) -> OperationReceipt: ...
-    async def create_callback(self, body: CallbackCreate, key: str) -> OperationReceipt: ...
-    async def list_workshop_locations(self) -> list[WorkshopLocation]: ...
-    async def list_workshop_slots(self, query: WorkshopSlotSearch) -> list[WorkshopSlot]: ...
-    async def create_workshop_booking(self, body: WorkshopCreate, key: str) -> BookingReceipt: ...
-    async def lookup_workshop_booking(self, proof: BookingLookup) -> WorkshopBooking: ...
-    async def update_workshop_booking(self, record_id: str, body: WorkshopPatch) -> WorkshopBooking: ...
-    async def cancel_workshop_booking(self, record_id: str) -> WorkshopBooking: ...
-    async def create_dealership_message(self, body: MessageCreate, key: str) -> OperationReceipt: ...
-    async def create_part_exchange(self, body: PartExchangeCreate, key: str) -> ValuationReceipt: ...
-    async def get_business_information(self) -> BusinessInformation: ...
-```
-
-Protected methods attach the API key internally; callers cannot supply headers. Every
-record-creation method receives a backend-generated key. Amendment and cancellation methods do not
-accept a key because those platform operations do not expose an idempotency-key parameter.
-
-### Error normalization
-
-```python
-class PlatformError(Exception):
-    http_status: int
-    code: str
-    safe_message: str
-    field_errors: dict[str, str]
-    retryable: bool
-    correlation_id: str
-```
-
-Unknown/non-JSON upstream errors become `UPSTREAM_ERROR` with no response body exposed. Known codes
-retain deterministic handling: `VALIDATION_ERROR`, `NOT_FOUND`, `BOOKING_NOT_FOUND`,
-`SLOT_UNAVAILABLE`, `VEHICLE_RESERVED`, `VEHICLE_UNAVAILABLE`, `IDEMPOTENCY_CONFLICT`,
-`UNAUTHORISED`, and `INTERNAL_ERROR`.
-
-Retry policy:
-
-- GET: up to 2 retries for connection failure, timeout, 429, or retryable 5xx.
-- Record-creation POST: retry only with the identical body and persisted idempotency key.
-- Workshop lookup POST: one retry only when the request is known not to have reached the platform;
-  otherwise allow the customer to resubmit the same proof because the operation is read-only.
-- PATCH/DELETE: do not blind-retry an ambiguous outcome. Use the verified internal booking ID to
-  read and reconcile the current booking state, then report the known result or an unknown outcome.
-- Never retry validation, conflict business rules, authorization, or not-found errors blindly.
-
-## 12. Prompt and response contract
-
-The system policy contains:
-
-- role and Northstar scope;
-- current server date and timezone;
-- tool-use requirement for dynamic facts;
-- prohibition on invented price, availability, offer, hours, policy, or outcome;
-- distinction between received/requested/registered/estimated/confirmed/cancelled;
-- confirmation and privacy rules;
-- prompt-injection and secret-exposure rules;
-- concise, helpful UK English response style.
-
-The provider must return either a tool proposal or a response envelope:
-
-```json
-{
-  "text": "I found three matching vehicles.",
-  "view": {
-    "type": "vehicle_list",
-    "version": 1,
-    "items": []
-  },
-  "suggestions": [
-    {"id": "compare", "label": "Compare these"}
-  ]
-}
-```
-
-Application code validates the envelope, reconstructs sensitive/status-dependent view models from
-trusted tool output where necessary, and strips unknown fields.
-
-## 13. Validation rules
-
-- IDs: exact stable formats/allow-listed returned values; never arbitrary URLs.
-- Email: syntactically valid, normalized conservatively, maximum 254 characters.
-- UK phone: defer final validity to platform while enforcing reasonable length/character bounds.
-- Names: trimmed, platform-compatible length, no blank values.
-- Registration: trimmed and normalized for display/comparison without inventing validity.
-- Mileage and money: base-10 non-negative integers; prices sent in pence.
-- Dates: ISO `YYYY-MM-DD` at adapters; relative text is resolved then explicitly confirmed.
-- Free text: platform maximums where defined; webchat maximum at or below them; control characters
-  removed except normal whitespace.
-- Enumerations: exact platform values for enquiry type, department, preferred contact method,
-  condition, offer product type, availability, and inventory sort.
-
-## 14. Concurrency and idempotency
-
-- An in-process lock serializes turns per conversation for the single-container assignment.
-- Database uniqueness deduplicates client message/action IDs even if requests race.
-- Draft confirmation uses a transaction and version compare-and-swap from
-  `awaiting_confirmation` to `executing`.
-- For record creation, the idempotency key and request fingerprint commit before the upstream call.
-- Amendment and cancellation attempts persist `clientActionId` and request fingerprint before the
-  call, then reconcile through the booking read endpoint after an ambiguous outcome.
-- A second confirmation reads the existing attempt and returns its current/final state.
-- Platform `IDEMPOTENCY_CONFLICT` is treated as an internal safety fault, not worked around with a
-  fresh key.
-
-For multi-instance production, replace the in-process lock with database/distributed locking while
-retaining the same uniqueness and state transition rules.
-
-## 15. Logging and redaction
-
-Allowed structured fields:
+`Orchestrator.run()` performs:
 
 ```text
-timestamp, level, service, event, correlation_id, conversation_hash,
-turn_id, tool_name, operation_kind, upstream_path_template,
-http_status, platform_error_code, retryable, duration_ms, retry_count
+lock conversation
+  → return existing turn/messages when clientMessageId already exists
+  → create running turn
+  → persist user message
+  → build TurnContext
+  → execute typed action when present
+  → run bounded provider/tool loop
+  → validate V2 domain-goal plan
+  → apply SemanticPlanPolicy
+  → resolve canonical goal to exact tool
+  → present result
+  → persist assistant message
+  → finish turn
 ```
 
-Redacted/omitted fields include API keys, authorization headers, email, phone, names, registration,
-booking proof, notes/messages, exact prompts, and raw upstream bodies. Exceptions are converted to
-sanitized categories before logging.
+`asyncio.Lock` is keyed by conversation ID and is process-local. Timeout becomes `LLM_TIMEOUT`;
+other internal failures become `LLM_INVALID_RESPONSE`. The browser receives a failed turn rather
+than raw exception details.
 
-## 16. Test design
+### 7.2 Bounded context
 
-### 16.1 Unit tests
+`ConversationHistoryBuilder` includes:
 
-- search context refinement and reset;
-- exact money formatting and `null` price handling;
-- required-field detection for every operation kind;
-- draft material hashing, edit invalidation, expiry, and double confirmation;
-- platform status-to-claim mapping;
-- all documented error recovery mappings;
-- verified grant required/expired/revoked paths;
-- page-context allow-list and safe link construction;
-- cookie-token verification, same-origin request checks, and log redaction;
-- private booking-proof submission never entering messages, model input, drafts, or logs;
-- tool loop/count limits and invalid model payload handling.
+- current page snapshot;
+- persisted canonical workflow state;
+- initial page snapshot when different;
+- up to the last 20 messages;
+- previous closed view payloads as trusted application context;
+- ordered displayed vehicles and offers;
+- latest vehicle search filters/page;
+- page-structured vehicle entities;
+- typed widget action as a trusted developer message.
 
-### 16.2 Contract tests
+The builder performs no provider or dealership calls.
 
-Use recorded representative payloads derived from `dealership-platform/openapi.json` and assert:
+### 7.3 Hosted semantic planner
 
-- query names and pence integer encoding;
-- protected headers are attached only server-side;
-- mandatory booking and optional record-creation idempotency headers;
-- absence of an invented idempotency header contract for PATCH/DELETE;
-- every write request body matches the platform contract;
-- structured success and error responses normalize correctly;
-- relative image paths resolve against the configured platform URL.
+`OpenAIProvider` sends a stateless Responses API request:
 
-### 16.3 Seeded integration tests
+```json
+{
+  "model": "configured model/deployment",
+  "instructions": "SYSTEM_POLICY",
+  "input": "converted conversation items",
+  "tools": ["plan_customer_turn schema"],
+  "tool_choice": {"type": "function", "name": "plan_customer_turn"},
+  "parallel_tool_calls": false,
+  "max_output_tokens": 900,
+  "store": false
+}
+```
 
-- `veh-001`: successful availability and test-drive path.
-- `veh-007`: reserved error and successful interest path.
-- `veh-013`: sold test-drive prevention and allowed sales enquiry.
-- `veh-019`: price-on-request response.
-- published offer terms and finance notice without invented values.
-- successful sales enquiry (`received`), interest (`registered`), and callback (`requested`).
-- successful dealership message (`received`) and part-exchange estimate (`estimated`) with its
-  qualification.
-- Bolton: no first-week workshop results without false outage.
-- `WORK-10001`/Taylor/`AB12 CDE`/`07700900123`: successful verified lookup.
-- one-field lookup mismatch: generic `BOOKING_NOT_FOUND`.
-- workshop booking/amend/cancel and released-slot behaviour.
-- same key/body replay and different-body conflict safety.
-- holiday exception and part-exchange qualification.
+Exactly one matching function call is required. Unknown functions, missing call IDs, invalid JSON,
+non-object arguments, or invalid `TurnPlanPayload` fields fail the turn.
 
-Each mutation test resets seeded platform state or uses isolated generated inputs to remain
-repeatable.
+`TurnPlanPayload` is a V2 Pydantic union discriminated by `domain`. Each domain exposes only its own
+goals and fields (`extra="forbid"`), and goal-specific validators enforce requirements such as a
+target for `workshop.check_service`. The provider-neutral contract passed onward is:
 
-### 16.4 Browser tests
+```python
+TurnPlan(
+    domain=str,
+    goal=str,
+    arguments=dict,
+    response=str,
+    version=2,
+)
+```
 
-- launcher positioning at desktop/mobile sizes;
-- open/close focus loop, Escape, tab order, and live announcements;
-- send/loading/retry and duplicate-click prevention;
-- transcript restore after reload;
-- authorization cookie is `HttpOnly` and the token is absent from local storage and JavaScript;
-- private booking-lookup fields are cleared and absent from transcript/model-facing requests;
-- selected vehicle context from the website dialog;
-- vehicle/offer/slot/confirmation/receipt rendering;
-- unread badge when a response finishes while closed;
-- LLM and platform unavailable states;
-- no secret in DOM, JS bundles, storage, or browser network headers.
+### 7.4 Canonical domain-goal ontology
 
-## 17. Definition of done
+`planning/ontology.py` is the single source for executable goal identifiers:
 
-- All P0 requirements and PRD acceptance scenarios pass or have a documented limitation approved
-  before handoff.
-- Docker Compose starts the platform, website, and webchat from a clean checkout.
-- `.env.example`, setup instructions, migration behaviour, important decisions, and limitations are
-  documented.
-- No supplied dealership behaviour or seeded data is changed.
-- The API key is absent from browser-delivered assets and protected operations work through the
-  server.
-- Tests cover read flows, every write family, idempotency, verified booking management, error
-  recovery, persistence, and accessibility-critical interactions.
-- Logs demonstrate correlation and redaction without containing customer contact or secrets.
+| Domain | Supported goals |
+| --- | --- |
+| `vehicle` | `search`, `continue_search`, `compare`, `view_details`, `check_availability`, `choose_preferences`, `apply_preference` |
+| `offer` | `browse`, `view_details`, `enquire` |
+| `test_drive` | `book` |
+| `sales` | `enquire`, `request_callback`, `register_vehicle_interest` |
+| `dealership` | `find`, `view_contact`, `view_departments`, `view_opening_hours`, `send_message` |
+| `workshop` | `find_locations`, `browse_services`, `check_service`, `book_service`, `find_booking`, `change_booking`, `cancel_booking` |
+| `part_exchange` | `estimate`, `request_follow_up` |
+| `business` | `finance_information`, `privacy_information`, `part_exchange_information`, `general_information` |
+| `conversation` | `respond`, `clarify` |
+
+New workflow state uses one canonical shape:
+
+```json
+{
+  "version": 2,
+  "domain": "workshop",
+  "goal": "check_service",
+  "stage": "planned",
+  "entities": {"serviceQuery": "Do you do car cleaning?"},
+  "constraints": {}
+}
+```
+
+`normalize_workflow_state()` upgrades persisted V1 `intent` states at the storage/context boundary.
+The legacy mapping exists only for in-progress conversations created before this schema; providers
+cannot emit V1 intent names.
+
+### 7.5 Fake planning and deterministic fallback routing
+
+`FakeLlmProvider` delegates to `DeterministicTurnPlanner`, which returns exactly one
+schema-validated `TurnPlan` and no business `ToolCall`. It first applies focused semantic rules for
+natural workshop requests, pagination, preferences, offers, and trusted displayed-vehicle
+references. It then adapts confident `DeterministicApplicationRouter` routes into canonical
+domain-goal plans. Every fake plan is passed through `parse_turn_plan()`, the same validator used by
+`OpenAIProvider`.
+
+`DeterministicApplicationRouter` is application-owned fallback routing. It builds a normalized
+`ConversationContext`, handles trusted tool facts through `ToolResultResponder`, then offers the
+turn in order to:
+
+1. `SupportRouter` — offers, callbacks, messages, departments, business information, estimates,
+   sales enquiries, hours, locations;
+2. `WorkshopRouter` — private booking lookup, workshop locations, and explicit legacy service
+   actions;
+3. `VehicleRouter` — typed actions, comparison, interest, availability, details, test drives,
+   discovery and refinement.
+
+Parser helpers extract bounded filters, location, contact, date/day, slot, department, and model
+comparison wording. `DeterministicApplicationRouter.route()` exposes only a confident deterministic
+route or trusted tool-fact response; it deliberately omits greeting/generic fallbacks. For online
+turns, the configured provider always interprets free text first. The semantic plan policy consults the
+router only when that provider proposes `conversation.respond`. The transition controller, tool
+registry, and presenter own everything after provider planning, so changing provider cannot change
+the application execution architecture.
+
+### 7.6 Semantic plan policy
+
+`SemanticPlanPolicy` evaluates every typed provider plan before transition control. Valid business
+goals pass through unchanged. It intervenes only on `conversation.respond` and supports three
+configured modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | Accept provider prose unchanged |
+| `observe` | Calculate and log the proposed application decision, but preserve provider output |
+| `enforce` | Replace with a confident deterministic route, request one re-plan for a strong business signal, or return a server-owned clarification after a repeated fallback |
+
+The retry instruction is appended only to the in-memory turn history. It forbids another
+`conversation.respond` for that retry and does not enter the persisted transcript. The existing
+four-iteration provider limit includes the retry, and a boolean guard prevents a second retry.
+Application decisions are logged without customer text; the structured context contains mode,
+decision, effective decision, reason, and conversation ID.
+
+`DeterministicPlanRouter` wraps the high-confidence application router used by enforcement mode.
+It converts the router's internal tool-shaped choice through `ToolCallPlanAdapter` into a V2
+`TurnPlan`. `ProviderToolLoop._apply_plan()` therefore sends hosted plans, fake plans, and online
+safety replacements through the same `TransitionController`; no policy replacement can call a
+business tool directly.
+
+### 7.7 Transition control
+
+`TransitionController` owns workflow branching and reference resolution. It prevents stale state
+from leaking into a new task, distinguishes offers from stock vehicles, resolves page-scoped and
+displayed-vehicle references, preserves explicit refinements, and returns either:
+
+```python
+PlannedTransition(
+    state=canonical_workflow_state,
+    tool_call=ToolCall(...) | None,
+    response=str,
+    suggestion_dimension=str | None,
+)
+```
+
+`ToolTransitionRouter.routes` is keyed by `GoalKey` and replaces an intent `if/elif` chain. Every
+business goal either has one focused route or is explicitly handled as a non-tool conversation or
+preference transition. A completeness test fails if a new executable goal has no route.
+
+`planning/conformance.py` defines capability-level evidence for vehicle discovery. A provider plan
+with `goal=vehicle.search` or `goal=vehicle.apply_preference` is executable only when at least one of
+these is present:
+
+- a substantive typed identity, preference, location, availability, price, mileage, or year field;
+- explicit discovery language associated with vehicle inventory;
+- ranked or filtered vehicle-set wording;
+- a provider-selected page scope grounded by an ordinary result-set reference in the exact turn.
+
+Default sort, pagination, limits, and hidden context flags are not discovery evidence. A rejected
+vehicle plan becomes the active scoped business-information goal (part exchange when that workflow
+is active, otherwise general information), with the exact customer wording passed to the fact
+resolver. This prevents unrelated vehicle cards without maintaining a list of unsupported questions.
+If a provider emits `vehicle.choose_preferences` while also supplying a concrete identity, fuel,
+transmission, body-style, location, availability, price, mileage, or year constraint, transition
+conformance normalizes it to `vehicle.search`; only genuinely broad requests open the chooser.
+
+When a free-form make/model term must be reconciled with typed fuel, transmission, or body-style
+filters, the deterministic route marks a bounded `resolveAgainstLiveFacets` preflight. Transition
+control reads live facets first; the resulting canonical make/model values re-enter the same typed
+plan pipeline before stock search. Generic dimension phrases such as “hybrid SUVs” are reduced to
+their typed filters and do not trigger an unnecessary preflight.
+
+For named workshop support questions, a narrow conformance rule prevents a provider's structurally
+valid `workshop.browse_services` misclassification from rendering the entire catalogue. The request
+becomes `workshop.check_service`, then `resolve_live_service()` returns one explicit outcome:
+
+- `matched`: concise current price/duration/description facts;
+- `ambiguous`: only the equally ranked candidate services;
+- `unsupported`: an unavailable answer and a “View supported services” action, without catalogue items.
+
+Business goals route through `get_business_information` with two application-owned inputs: the
+topic derived from the canonical goal and the exact current `user_text`. `BusinessInformationResolver`
+builds searchable documents from stable fact keys, labels, semantic descriptions, and current
+platform values. It does not maintain customer-utterance rules. Topic selects the eligible fact
+catalogue but contributes no relevance score, so prior part-exchange context cannot make an estimate
+notice answer “will you pick up my car?”. Results are closed:
+
+- `matched`: render only the highest-relevance authoritative fact;
+- `ambiguous`: ask for a narrower information topic without exposing the candidate payload;
+- `unavailable`: state that Northstar has no confirmed answer and offer dealership contact.
+
+Matched and fail-closed business results terminate the provider loop. The exact question is never
+returned to the provider after the fact check, and restored version-1 bulk cards remain supported by
+the widget compatibility renderer.
+
+### 7.8 Provider/tool loop
+
+- maximum four provider iterations;
+- maximum one rejected `conversation.respond` re-plan within those four iterations;
+- maximum four calls in one provider response;
+- each provider request has a 20-second orchestration timeout by default;
+- renderable views and direct answer tools terminate immediately;
+- non-terminal facts and updated workflow state are appended to in-memory history;
+- workflow state is persisted after planned and executed transitions.
+
+## 8. Tool contracts and catalogue
+
+### 8.1 Shared result
+
+```python
+@dataclass(frozen=True)
+class ToolResult:
+    text: str
+    view_type: str | None
+    view_payload: dict[str, Any] | None
+    facts: dict[str, Any]
+```
+
+`text` and `view_payload` are customer-facing. `facts` are trusted provider follow-up data and are
+not automatically exposed as raw UI JSON.
+
+### 8.2 Read/form tools
+
+| Capability | Tools |
+| --- | --- |
+| Vehicles | `search_vehicles`, `select_page_vehicles`, `get_vehicle_facets`, `get_vehicle`, `get_vehicle_availability`, `compare_vehicles`, `compare_vehicle_models` |
+| Catalogue | `list_offers`, `get_offer`, `list_dealerships`, `list_dealership_departments`, `get_dealership`, `get_opening_hours`, `list_opening_hours`, `get_business_information` |
+| Workshop/test drive | `get_service_information`, `list_service_types`, `list_workshop_locations`, `list_test_drive_slots`, `list_workshop_slots` |
+| Application forms | `request_workshop_booking_lookup_form`, `request_part_exchange_estimate_form`, `estimate_part_exchange` |
+
+Vehicle search defaults to `availability=available` and `pageSize=3` unless an explicit supported
+availability is supplied. Town names resolve against live dealerships using normalized exact
+matching first, then a high-confidence fuzzy match only when the best candidate is unambiguous.
+Workshop service wording resolves against the live service catalogue, and past slots are filtered
+out.
+
+Business-information reads validate a required `topic` and exact `question`, fetch the current
+platform payload, and pass it through `BusinessInformationResolver`. The customer view contains a
+version-2 `facts` list and never contains unselected platform fields. An unanswerable query returns
+no card and cannot fall back into provider-generated prose.
+
+### 8.3 Workflow preparation tools
+
+| Tool | Workflow kind |
+| --- | --- |
+| `prepare_sales_enquiry` | `sales_enquiry` |
+| `prepare_test_drive` | `test_drive` |
+| `prepare_vehicle_interest` | `vehicle_interest` |
+| `prepare_callback` | `callback` |
+| `prepare_workshop_booking` | `workshop_booking` |
+| `prepare_workshop_amendment` | `workshop_amend` |
+| `prepare_workshop_cancellation` | `workshop_cancel` |
+| `prepare_dealership_message` | `dealership_message` |
+| `prepare_part_exchange` | `part_exchange` |
+
+These tools prepare drafts only. Confirmation is deliberately absent from the provider tool
+catalogue.
+
+## 9. Workflow lifecycle
+
+![Write workflow lifecycle](./diagrams/write-workflow-lifecycle.svg)
+
+### 9.1 Draft preparation
+
+`WorkflowService.prepare()`:
+
+1. rejects unsupported kinds;
+2. removes empty values;
+3. injects the latest verified grant for workshop amend/cancel;
+4. calculates missing required fields;
+5. selects `collecting` or `awaiting_confirmation`;
+6. calculates `sha256(canonical JSON(kind, fields))`;
+7. cancels any active draft of the same kind and inserts a new 24-hour draft;
+8. returns a safe summary that hides contact details and the verified grant ID.
+
+### 9.2 Confirmation and attempts
+
+`WorkflowRepository.begin_confirmation()` runs inside `BEGIN IMMEDIATE`:
+
+- replay an existing `(conversation_id, client_action_id)` attempt;
+- require an unexpired `awaiting_confirmation` draft;
+- move the draft to `executing`;
+- create an operation attempt;
+- persist a UUID idempotency key and request fingerprint before the HTTP call.
+
+Success stores the public receipt on both attempt and draft. A retryable `DealershipError` returns
+the draft to `awaiting_confirmation`; a non-retryable error moves it to `failed`.
+
+### 9.3 Execution dispatch
+
+Creation kinds dispatch through a method map. Vehicle interest additionally rechecks that the live
+availability is `reserved`. Workshop amendment and cancellation load the server-side booking ID
+from the verified grant, call PATCH/DELETE, and revoke the grant.
+
+### 9.4 Private booking verification
+
+The browser posts reference, surname, registration, phone, and requested mode directly to
+`workshop-booking-lookup`. The API removes `mode` before the platform proof call. A platform 404 is
+normalized to generic `BOOKING_NOT_FOUND`.
+
+Success stores only:
+
+- platform booking record ID (server-side only);
+- public reference;
+- slot/time, dealership, service, and status snapshot;
+- expiry and revocation state.
+
+The grant expires after 30 minutes and is scoped to the conversation.
+
+## 10. Dealership integration
+
+### 10.1 HTTP policy
+
+`DealershipClient` uses a base URL ending in `/`, accepts JSON, and owns its `httpx.AsyncClient`
+unless a test injects one. The timeout is 3 seconds to connect and 8 seconds overall.
+
+Protected methods add `X-API-Key`. Supported create methods also add `Idempotency-Key` supplied by
+the workflow attempt. Callers cannot provide arbitrary headers.
+
+### 10.2 Error policy
+
+| Failure | Normalized result |
+| --- | --- |
+| `httpx.TimeoutException` | `503 PLATFORM_TIMEOUT`, retryable |
+| Other `httpx.HTTPError` | `503 PLATFORM_UNAVAILABLE`, retryable |
+| Structured platform error | Preserve status/code/message/retryable/field errors |
+| Non-JSON error response | `PLATFORM_ERROR` with safe generic message |
+| Declared JSON body over 2 MB | `502 PLATFORM_RESPONSE_TOO_LARGE` |
+| Invalid/unapproved image | `404 IMAGE_NOT_FOUND` |
+
+No automatic retry/backoff is currently implemented.
+
+### 10.3 Vehicle image proxy
+
+The proxy first loads the vehicle, then accepts only an `http`/`https` image on the configured
+platform hostname whose path starts `/assets/vehicles/`. It fetches the path without forwarding the
+platform API key, requires an image content type, and limits content to 5 MB.
+
+## 11. Persistence
+
+`Database` enables foreign keys and a 5-second busy timeout per connection. Migration startup sets
+WAL journal mode and records applied migration filenames in `schema_migrations`. Repository writes
+use `BEGIN IMMEDIATE` transactions.
+
+### 11.1 Tables
+
+#### `conversations`
+
+| Column/group | Purpose |
+| --- | --- |
+| `id`, `status` | UUID and active/deleted/expired lifecycle |
+| `token_hash`, `session_hash` | Hashed authorization compatibility/session values |
+| `summary` | Reserved compact summary field |
+| `initial_page_context_json`, `last_page_context_json` | Start/current bounded page-data snapshots |
+| `workflow_state_json` | Canonical deterministic workflow state |
+| timestamps + `expires_at` | Ordering and conversation retention |
+
+#### `turns`
+
+`id`, conversation FK, unique `(conversation_id, client_message_id)`, running/completed/failed
+status, unique correlation ID, sanitized error category, and timestamps.
+
+#### `messages`
+
+Ordered per conversation with optional turn FK, role (`user`, `assistant`, `system`), text, optional
+view type/payload JSON, and timestamp. `(conversation_id, sequence)` is unique.
+
+#### `workflow_drafts`
+
+Kind, version, status, validated fields JSON, material hash, optional result JSON, timestamps, and
+24-hour expiry. States are collecting, awaiting confirmation, executing, succeeded, failed,
+cancelled, or expired.
+
+#### `operation_attempts`
+
+Draft/conversation FKs, unique client action per conversation, unique optional idempotency key,
+request fingerprint, prepared/sent/succeeded/failed/unknown state, public result JSON, safe error
+metadata, and timestamps.
+
+#### `verified_booking_grants`
+
+Conversation FK, server-side booking ID, public reference, safe booking snapshot, 30-minute expiry,
+and optional revocation timestamp.
+
+### 11.2 Restoration
+
+`ConversationRestorer`:
+
+1. loads ordered messages;
+2. resolves draft IDs to current workflow statuses;
+3. suppresses cards whose drafts are no longer active;
+4. removes pending cards completed by later receipts while preserving repeated workflows;
+5. inserts a synthetic public receipt when workflow success exists but the message is missing.
+
+## 12. Security middleware and logging
+
+### 12.1 Security middleware
+
+For `/api/chat/v1`:
+
+- declared body size over 64 KiB → `413 REQUEST_TOO_LARGE`;
+- invalid `Content-Length` → `400 INVALID_REQUEST`;
+- POST/PATCH without JSON → `415 JSON_REQUIRED`;
+- state change from a non-configured origin → `403 ORIGIN_REJECTED`;
+- more than 60 requests/minute for an in-memory client key → `429 RATE_LIMITED`.
+
+Test mode permits a missing origin so isolated TestClient requests remain ergonomic.
+
+### 12.2 Redaction
+
+`redact()` recursively replaces sensitive structured keys and also removes embedded email, UK-like
+phone, and bearer-token patterns. `JsonFormatter` emits timestamp, level, component, event, optional
+redacted context, and exception class only.
+
+## 13. Configuration
+
+| Variable | Default | Validation/behavior |
+| --- | --- | --- |
+| `ENVIRONMENT` | `development` | `development`, `test`, or `production` |
+| `LLM_PROVIDER` | `openai` | `openai` or `azure` |
+| `OPENAI_API_KEY` | empty | Blank becomes `None`; required for production OpenAI |
+| `OPENAI_MODEL` | `gpt-5-mini` | Non-empty |
+| `AZURE_OPENAI_ENDPOINT` | empty | Required with Azure; normalized to `/openai/v1/` |
+| `AZURE_OPENAI_API_KEY` | empty | Required with Azure |
+| `AZURE_OPENAI_DEPLOYMENT` | empty | Required with Azure; passed as model field |
+| `NORTHSTAR_API_KEY` | local development value | Server-only protected platform credential |
+| `NORTHSTAR_BASE_URL` | Compose dealership URL | Non-empty |
+| `WEBCHAT_DATABASE_PATH` | `/data/webchat.sqlite3` | SQLite file path |
+| `WEBCHAT_COOKIE_SECURE` | `false` | Enable for HTTPS production |
+| `WEBCHAT_ALLOWED_ORIGIN` | `http://localhost:4173` | Exact CORS/origin value |
+| `WEBCHAT_RETENTION_DAYS` | `30` | Integer at least one |
+| `SEMANTIC_PLAN_POLICY_MODE` | `observe` in bare settings; Compose supplies `enforce` | `off`, `observe`, or `enforce`; legacy `GENERAL_RESPONSE_GATE_MODE` is accepted as an input alias |
+| `LOG_LEVEL` | `INFO` | Root structured logging level |
+
+## 14. Packaging and static assets
+
+`pyproject.toml` includes migrations in `webchat.persistence` and includes widget assets from:
+
+```text
+widget/*.js
+widget/*.css
+widget/core/*.js
+widget/views/*.js
+```
+
+The nested patterns are required after the widget module split; omitting them produces a package
+that passes source-mounted tests but fails to load nested ES modules when installed.
+
+## 15. Test design and current coverage
+
+The current suite contains 335 tests.
+
+| Suite | Files/coverage |
+| --- | --- |
+| Root health | app creation, health endpoints, production config, hosted widget |
+| Contract | dealership read/query/header/error/image normalization using mock transport |
+| Integration | conversations, restoration, cookie/session behavior, typed actions, forms, workflow APIs, security, semantic flow contracts |
+| Unit | business semantics, semantic plan policy, ontology/state compatibility, migrations, repositories, fake planning, parsing, provider adapter, tool handlers, redaction, typed service resolution, suggestions, transitions, context, workflows |
+| Browser module | Node test for saved ordinary-form prefill and private booking-proof exclusion |
+
+Run the installed-image suite:
+
+```bash
+docker build --target test -t northstar-webchat-test:refactor ./webchat-service
+docker run --rm northstar-webchat-test:refactor
+docker run --rm northstar-webchat-test:refactor ruff check webchat tests
+node --test webchat-service/tests/browser/*.mjs
+```
+
+Manual browser regression must cover nested module loading, conversation restoration, saved
+ordinary-form prefill, private lookup exclusion, typed cards/actions, and every confirmation flow.
+
+## 16. Known implementation gaps
+
+- No automated browser runner is installed.
+- Platform requests are not retried automatically.
+- Ambiguous workshop PATCH/DELETE outcomes are not reconciled automatically.
+- In-process locks/rate limits do not coordinate multiple service replicas.
+- Readiness does not probe the dealership or AI provider.
+- Body limiting relies on `Content-Length` rather than a streaming hard cap.
+- Draft personal fields do not yet have a separate cleanup schedule earlier than general workflow
+  retention/state.
+- The conversation-response policy is conservative by design; unmatched novel wording is allowed as
+  conversation and should be reviewed through observe-mode decision logs before expanding signals.
+
+## 17. Change rules
+
+Update this LLD when any of the following changes:
+
+- module ownership/import paths;
+- endpoint, request model, cookie, or browser-storage contract;
+- semantic domain/goal, transition route, tool input, or closed view;
+- workflow field/state/idempotency behavior;
+- migration or repository schema;
+- provider loop limits, context composition, or provider request contract;
+- packaging patterns or verification commands.

@@ -394,9 +394,28 @@ class WorkflowRepository:
             ).fetchone()
             if replay:
                 result = dict(replay)
-                result["draft"] = dict(
-                    connection.execute("SELECT * FROM workflow_drafts WHERE id = ?", (result["draft_id"],)).fetchone()
-                )
+                draft = connection.execute(
+                    "SELECT * FROM workflow_drafts WHERE id = ? AND conversation_id = ?",
+                    (result["draft_id"], conversation_id),
+                ).fetchone()
+                result["draft"] = dict(draft)
+                if (
+                    result["state"] == "failed"
+                    and bool(result.get("retryable"))
+                    and draft["status"] == "awaiting_confirmation"
+                    and draft["expires_at"] > utc_now()
+                ):
+                    timestamp = utc_now()
+                    connection.execute(
+                        "UPDATE operation_attempts SET state = 'prepared', error_code = NULL, "
+                        "retryable = NULL, updated_at = ? WHERE id = ?",
+                        (timestamp, result["id"]),
+                    )
+                    connection.execute(
+                        "UPDATE workflow_drafts SET status = 'executing', updated_at = ? WHERE id = ?",
+                        (timestamp, result["draft_id"]),
+                    )
+                    result.update(state="prepared", error_code=None, retryable=None)
                 return result
             draft = connection.execute(
                 "SELECT * FROM workflow_drafts WHERE id = ? AND conversation_id = ?",
@@ -404,6 +423,30 @@ class WorkflowRepository:
             ).fetchone()
             if not draft or draft["status"] != "awaiting_confirmation" or draft["expires_at"] <= utc_now():
                 raise ValueError("Draft is not available for confirmation")
+            retry = connection.execute(
+                "SELECT * FROM operation_attempts WHERE draft_id = ? AND state = 'failed' "
+                "AND retryable = 1 ORDER BY updated_at DESC LIMIT 1",
+                (draft_id,),
+            ).fetchone()
+            if retry:
+                timestamp = utc_now()
+                connection.execute(
+                    "UPDATE operation_attempts SET client_action_id = ?, state = 'prepared', "
+                    "error_code = NULL, retryable = NULL, updated_at = ? WHERE id = ?",
+                    (client_action_id, timestamp, retry["id"]),
+                )
+                connection.execute(
+                    "UPDATE workflow_drafts SET status = 'executing', updated_at = ? WHERE id = ?",
+                    (timestamp, draft_id),
+                )
+                return {
+                    **dict(retry),
+                    "client_action_id": client_action_id,
+                    "state": "prepared",
+                    "error_code": None,
+                    "retryable": None,
+                    "draft": dict(draft),
+                }
             attempt_id = str(uuid.uuid4())
             idempotency_key = str(uuid.uuid4())
             connection.execute(
@@ -457,8 +500,12 @@ class WorkflowRepository:
                 (draft_status, utc_now(), draft_id),
             )
 
-    def cancel(self, conversation_id: str, draft_id: str) -> None:
+    def cancel(self, conversation_id: str, draft_id: str) -> dict:
         with self.database.transaction() as connection:
+            draft = connection.execute(
+                "SELECT id, kind FROM workflow_drafts WHERE id = ? AND conversation_id = ? ",
+                (draft_id, conversation_id),
+            ).fetchone()
             changed = connection.execute(
                 "UPDATE workflow_drafts SET status = 'cancelled', updated_at = ? "
                 "WHERE id = ? AND conversation_id = ? AND status IN ('collecting', 'awaiting_confirmation')",
@@ -466,6 +513,7 @@ class WorkflowRepository:
             ).rowcount
         if not changed:
             raise ValueError("Draft cannot be cancelled")
+        return dict(draft)
 
     def create_grant(
         self, conversation_id: str, booking_record_id: str, reference: str, snapshot: dict

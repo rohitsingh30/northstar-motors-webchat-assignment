@@ -1,10 +1,10 @@
 import json
 
 from webchat.domain.models import Message
-from webchat.orchestration.orchestrator import (
-    _current_offer_reference_context,
-    _current_vehicle_reference_context,
-    _current_vehicle_search_state,
+from webchat.orchestration.context.builder import (
+    current_offer_reference_context,
+    current_vehicle_reference_context,
+    current_vehicle_search_state,
 )
 
 
@@ -37,7 +37,7 @@ def test_reference_context_exposes_only_the_current_ordered_vehicle_results() ->
         ),
     ]
 
-    assert _current_vehicle_reference_context(messages) == [
+    assert current_vehicle_reference_context(messages) == [
         {
             "position": 1,
             "vehicleId": "veh-025",
@@ -69,6 +69,30 @@ def test_reference_context_exposes_only_the_current_ordered_vehicle_results() ->
     ]
 
 
+def test_vehicle_detail_does_not_replace_the_current_ordered_results() -> None:
+    messages = [
+        _message(
+            1,
+            "vehicle_list",
+            {
+                "items": [
+                    {"id": "veh-025", "model": "3 Series"},
+                    {"id": "veh-049", "model": "XC40"},
+                ]
+            },
+        ),
+        _message(
+            2,
+            "vehicle_details",
+            {"vehicle": {"id": "veh-025", "model": "3 Series"}},
+        ),
+    ]
+
+    assert [
+        item["vehicleId"] for item in current_vehicle_reference_context(messages)
+    ] == ["veh-025", "veh-049"]
+
+
 def test_search_state_comes_from_the_latest_vehicle_view() -> None:
     messages = [
         _message(
@@ -78,7 +102,7 @@ def test_search_state_comes_from_the_latest_vehicle_view() -> None:
         )
     ]
 
-    assert _current_vehicle_search_state(messages) == {
+    assert current_vehicle_search_state(messages) == {
         "filters": {"fuelType": "Hybrid"},
         "page": 2,
     }
@@ -105,7 +129,7 @@ def test_offer_reference_context_uses_the_latest_server_authored_offer_cards() -
         )
     ]
 
-    assert _current_offer_reference_context(messages) == [
+    assert current_offer_reference_context(messages) == [
         {
             "position": 1,
             "offerId": "offer-07",

@@ -57,6 +57,8 @@ Customers should be able to:
 Customers should be able to:
 
 - discover supported service types and suitable workshop locations;
+- ask whether a named service is supported and receive a clear matched, ambiguous, or unavailable
+  answer based on the current service catalogue;
 - make a new workshop booking;
 - amend an existing workshop booking;
 - cancel an existing workshop booking;

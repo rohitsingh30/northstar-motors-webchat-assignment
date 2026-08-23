@@ -1,12 +1,10 @@
 import pytest
 
-from webchat.orchestration.suggestions import (
+from webchat.orchestration.presentation.suggestions import (
     dealership_suggestions,
     no_vehicle_results_suggestions,
     offer_suggestions,
     opening_hours_suggestions,
-    remove_repeated_intent,
-    service_suggestions,
     service_type_suggestions,
     vehicle_availability_suggestions,
     vehicle_clarification_suggestions,
@@ -42,7 +40,6 @@ def test_suggestions_cover_useful_cross_capability_next_steps() -> None:
         no_vehicle_results_suggestions(),
         dealership_suggestions(),
         opening_hours_suggestions(),
-        service_suggestions(),
         workshop_location_suggestions(),
         offer_suggestions(),
     ]
@@ -108,14 +105,6 @@ def test_empty_workshop_availability_offers_live_alternative_locations() -> None
             "action": {"type": "show_workshop_services"},
         },
     ]
-
-
-def test_repeated_current_intent_is_removed_from_suggestions() -> None:
-    suggestions = remove_repeated_intent(
-        service_suggestions(), "find a workshop appointment"
-    )
-
-    assert [item["label"] for item in suggestions] == ["Find my booking"]
 
 
 def test_live_service_types_become_bookable_choice_chips() -> None:

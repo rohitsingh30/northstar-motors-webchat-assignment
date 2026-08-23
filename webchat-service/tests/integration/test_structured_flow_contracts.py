@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from webchat.config import Settings
 from webchat.integrations.contracts import ProviderReply, ToolCall
 from webchat.main import create_app
-from webchat.orchestration.tool_registry import ToolResult
+from webchat.orchestration.tools.result import ToolResult
 
 CONTEXT = {"path": "/", "section": "vehicles", "vehicleId": "veh-001", "title": "Used Cars"}
 
@@ -54,6 +54,7 @@ class ContractTools:
                 {"items": items},
             )
         view_type = {
+            "get_business_information": "business_information",
             "compare_vehicle_models": "vehicle_comparison",
             "estimate_part_exchange": "part_exchange_estimate",
             "list_dealership_departments": "dealership_list",
@@ -212,3 +213,79 @@ def test_free_form_service_intent_uses_semantic_tool_choice_and_structured_view(
     assert response.json()["status"] == "completed"
     assert response.json()["messages"][1]["viewType"] == view_type
     assert tools.calls[-1] == (tool_name, arguments)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_tool", "expected_view"),
+    [
+        (
+            "I want an indicative part-exchange estimate",
+            "request_part_exchange_estimate_form",
+            "part_exchange_estimate_form",
+        ),
+        (
+            "I want to book a workshop appointment",
+            "list_service_types",
+            "service_list",
+        ),
+        (
+            "show me the cheapest available cars",
+            "search_vehicles",
+            "vehicle_list",
+        ),
+        (
+            "What service types do you support?",
+            "list_service_types",
+            "service_list",
+        ),
+        (
+            "Find workshop availability for an annual service next week",
+            "list_workshop_slots",
+            "slot_list",
+        ),
+        (
+            "How does finance work?",
+            "get_business_information",
+            "business_information",
+        ),
+        (
+            "How do you use my personal data?",
+            "get_business_information",
+            "business_information",
+        ),
+        (
+            "How is the part-exchange estimate calculated?",
+            "get_business_information",
+            "business_information",
+        ),
+    ],
+)
+def test_default_offline_provider_returns_structured_views_for_sample_questions(
+    tmp_path: Path,
+    text: str,
+    expected_tool: str,
+    expected_view: str,
+) -> None:
+    settings = Settings(
+        environment="test",
+        webchat_database_path=tmp_path / "webchat.sqlite3",
+    )
+    with TestClient(create_app(settings)) as browser:
+        created = browser.post(
+            "/api/chat/v1/conversations", json={"pageContext": CONTEXT}
+        ).json()
+        tools = ContractTools()
+        browser.app.state.orchestrator.tools = tools
+        response = browser.post(
+            f"/api/chat/v1/conversations/{created['conversationId']}/turns",
+            json={
+                "clientMessageId": str(uuid4()),
+                "text": text,
+                "pageContext": CONTEXT,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert response.json()["messages"][1]["viewType"] == expected_view
+    assert tools.calls[-1][0] == expected_tool

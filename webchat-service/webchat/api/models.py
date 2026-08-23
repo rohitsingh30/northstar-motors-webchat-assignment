@@ -196,10 +196,13 @@ class ContactRequest(StrictModel):
 
 class TestDriveDraftRequest(ContactRequest):
     slotId: str = Field(pattern=r"^td-slot-[0-9]{4}$")
+    vehicleId: str = Field(pattern=r"^veh-[0-9]{3}$")
 
 
 class WorkshopDraftRequest(ContactRequest):
     slotId: str = Field(pattern=r"^ws-slot-[0-9]{4}$")
+    serviceTypeId: str = Field(min_length=1, max_length=80)
+    dealershipId: str = Field(min_length=1, max_length=80)
     registration: str = Field(min_length=2, max_length=20)
     mileage: int = Field(ge=0, le=2_000_000)
     notes: str | None = Field(default=None, max_length=1_000)

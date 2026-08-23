@@ -270,6 +270,22 @@
 .webchat-confirmation-actions button,
 .webchat-private-lookup button { min-height: 44px; padding: 9px 12px; border: 1px solid var(--webchat-ink); background: var(--webchat-ink); color: #fff; cursor: pointer; }
 .webchat-confirmation-actions button:last-child { background: #fff; color: var(--webchat-ink); }
+.webchat-dealership-enquiry-review { gap: 12px; padding: 14px; border-color: #d9e3df; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
+.webchat-enquiry-review-heading { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid #e3ebe7; }
+.webchat-enquiry-review-heading > strong { font-size: 16px; letter-spacing: -.02em; }
+.webchat-enquiry-review-heading > p { margin: 0; color: var(--webchat-muted); font-size: 11px; line-height: 1.45; }
+.webchat-dealership-enquiry-review .webchat-enquiry-summary { display: grid; grid-template-columns: 1fr; gap: 0; overflow: hidden; border: 1px solid #e0e7e3; border-radius: 9px; background: #fff; }
+.webchat-enquiry-summary > div { display: grid; grid-template-columns: 94px minmax(0, 1fr); align-items: baseline; gap: 10px; padding: 8px 10px; }
+.webchat-enquiry-summary > div + div { border-top: 1px solid #edf1ef; }
+.webchat-dealership-enquiry-review .webchat-enquiry-summary dt { color: #61746e; font-size: 10px; font-weight: 700; text-transform: none; }
+.webchat-dealership-enquiry-review .webchat-enquiry-summary dd { min-width: 0; font-size: 11px; font-weight: 750; line-height: 1.4; overflow-wrap: anywhere; }
+.webchat-enquiry-message { display: grid; gap: 5px; padding: 10px; border-radius: 9px; background: #f1f5f2; }
+.webchat-enquiry-message > p { margin: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.webchat-dealership-enquiry-review .webchat-confirmation-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding-top: 1px; }
+.webchat-dealership-enquiry-review .webchat-confirmation-actions button { width: 100%; min-height: 44px; border-radius: 8px; font: inherit; font-size: 11px; font-weight: 750; }
+.webchat-dealership-enquiry-review .webchat-confirmation-actions .webchat-secondary-action { min-width: 86px; }
+.webchat-privacy-footer { padding-top: 8px; border-top: 1px solid #e7ece9; color: var(--webchat-muted); }
+.webchat-privacy-footer .webchat-privacy-note { display: block; font-size: 10px; line-height: 1.45; }
 .webchat-workshop-amend-review { gap: 12px; padding: 14px; border-color: #d9e3df; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
 .webchat-amend-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #e3ebe7; }
 .webchat-amend-review-heading > strong { font-size: 15px; letter-spacing: -.015em; }
@@ -288,6 +304,20 @@
 .webchat-interest-review-heading > p { margin: 0; color: var(--webchat-muted); font-size: 11px; }
 .webchat-vehicle-interest-review .webchat-confirmation-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
 .webchat-vehicle-interest-review .webchat-confirmation-actions button { width: 100%; border-radius: 8px; font: inherit; font-size: 11px; font-weight: 750; }
+.webchat-callback-review { gap: 12px; padding: 14px; border-color: #d9e3df; border-radius: 12px; background: linear-gradient(145deg, #fff 0%, #f7faf8 100%); box-shadow: 0 5px 16px rgb(24 45 39 / 6%); }
+.webchat-callback-review-heading { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid #e3ebe7; }
+.webchat-callback-review-heading > strong { font-size: 15px; letter-spacing: -.015em; }
+.webchat-callback-review-heading > p { margin: 0; color: var(--webchat-muted); font-size: 11px; line-height: 1.45; }
+.webchat-callback-destination { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #e0e7e3; border-radius: 9px; background: #fff; }
+.webchat-callback-destination > div { display: grid; min-width: 0; gap: 2px; }
+.webchat-callback-destination strong { overflow-wrap: anywhere; font-size: 13px; }
+.webchat-callback-destination small { color: var(--webchat-muted); font-size: 10px; }
+.webchat-callback-department { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: #eef3dc; color: #48604e; font-size: 9px; font-weight: 800; }
+.webchat-callback-reason { display: grid; gap: 4px; padding: 10px; border-radius: 9px; background: #f1f5f2; }
+.webchat-callback-reason > p { margin: 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.webchat-callback-time { margin: 0; color: var(--webchat-muted); font-size: 10px; font-weight: 700; }
+.webchat-callback-review .webchat-confirmation-actions { display: grid; grid-template-columns: 1fr; gap: 7px; }
+.webchat-callback-review .webchat-confirmation-actions button { width: 100%; border-radius: 8px; font: inherit; font-size: 11px; font-weight: 750; }
 .webchat-private-lookup p { margin: 0; color: var(--webchat-muted); font-size: 12px; }
 .webchat-private-lookup label { display: grid; gap: 3px; font-size: 12px; font-weight: 700; }
 .webchat-private-lookup input { padding: 8px; font: inherit; }

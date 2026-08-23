@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from webchat.orchestration.tool_registry import ToolRegistry
+from webchat.orchestration.tools.registry import ToolRegistry
 
 
 class FakeDealership:
@@ -151,6 +151,17 @@ async def test_vehicle_list_uses_closed_safe_view() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vehicle_details_use_a_distinct_closed_view() -> None:
+    result = await ToolRegistry(FakeDealership()).execute(
+        "get_vehicle", {"id": "veh-019"}
+    )
+
+    assert result.view_type == "vehicle_details"
+    assert result.view_payload["vehicle"]["id"] == "veh-019"
+    assert "items" not in result.view_payload
+
+
+@pytest.mark.asyncio
 async def test_page_vehicle_selection_ranks_only_supplied_live_vehicle_ids() -> None:
     class RankedDealership(FakeDealership):
         async def get_vehicle(self, vehicle_id):
@@ -263,6 +274,18 @@ async def test_unknown_dealership_town_returns_no_cards() -> None:
 
 
 @pytest.mark.asyncio
+async def test_misspelled_dealership_town_returns_the_matching_card() -> None:
+    result = await ToolRegistry(FakeDealership()).execute(
+        "list_dealerships", {"town": "Manchaester"}
+    )
+
+    assert result.view_type == "dealership_list"
+    assert result.view_payload["items"] == [
+        {"id": "dealer-manchester", "town": "Manchester"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_opening_hours_are_grouped_into_customer_facing_location_cards() -> None:
     result = await ToolRegistry(FakeDealership()).execute(
         "list_opening_hours", {"day": "Saturday"}
@@ -340,6 +363,21 @@ async def test_service_types_include_a_chip_for_each_live_choice() -> None:
         "Full service",
         "Tyre fitting",
     ]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_named_service_returns_a_clear_outcome_not_the_catalogue() -> None:
+    result = await ToolRegistry(FakeDealership()).execute(
+        "get_service_information", {"q": "Do you do car cleaning?"}
+    )
+
+    assert result.view_type == "suggestion_list"
+    assert result.facts == {
+        "resolution": {"status": "unsupported"},
+        "items": [],
+    }
+    assert "not currently listed" in result.text
+    assert "items" not in result.view_payload
 
 
 @pytest.mark.asyncio
@@ -468,6 +506,8 @@ async def test_empty_workshop_availability_suggests_live_alternative_locations()
     )
 
     assert result.view_payload["items"] == []
+    assert result.text == "No appointments for MOT are currently available in Stockport."
+    assert result.view_payload["emptyMessage"] == result.text
     assert result.view_payload["suggestions"] == [
         {
             "label": "Try Manchester",

@@ -1,6 +1,8 @@
 // Controller state is private to the widget and independent of the host application.
-import { createChatApi } from "./webchat-api.js";
-import { pageContext } from "./webchat-context.js";
+import { createChatApi } from "./core/api.js";
+import { pageContext } from "./core/context.js";
+import { createFormProfile } from "./core/form-profile.js";
+import { bookingRecoveryKind, retryTurnState } from "./core/recovery.js";
 import {
   inlineBookingReceipt,
   inlineBookedTestDrive,
@@ -14,20 +16,10 @@ import {
   testDriveSlotPicker,
   workshopDetailsForm,
   workshopSlotPicker,
-} from "./webchat-view.js";
+} from "./views/message.js";
 
 const CONVERSATION_KEY = "northstarConversationId";
 const OPEN_KEY = "northstarChatOpen";
-const FORM_PROFILE_KEY = "northstarFormProfileV1";
-const INTERNAL_FORM_FIELDS = new Set([
-  "draftId",
-  "mode",
-  "offerId",
-  "serviceTypeId",
-  "slotId",
-  "vehicleId",
-  "verifiedGrantId",
-]);
 const STARTER_PROMPTS = [
   { label: "Show me cars under £35,000.", text: "Show me cars under £35,000." },
   { label: "I need a petrol automatic SUV with low mileage.", text: "I need a petrol automatic SUV with low mileage." },
@@ -60,96 +52,8 @@ export function createWebchat(root = document, options = {}) {
   let pendingClientId = null;
   let unreadCount = 0;
   let progressTimer = null;
-
-  function savedFormProfile() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(FORM_PROFILE_KEY) || "{}");
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-
-  function reusableFormField(field) {
-    const name = String(field?.name || "");
-    const type = String(field?.type || "").toLowerCase();
-    return Boolean(
-      name
-      && !INTERNAL_FORM_FIELDS.has(name)
-      && !field.disabled
-      && !field.readOnly
-      && !["button", "file", "hidden", "password", "reset", "submit"].includes(type)
-      && field.closest("form")
-      && transcript.contains(field)
-    );
-  }
-
-  function formProfileFields(container) {
-    const selector = "input[name], select[name], textarea[name]";
-    return [
-      ...(container.matches?.(selector) ? [container] : []),
-      ...container.querySelectorAll(selector),
-    ];
-  }
-
-  function rememberFormFields(container) {
-    const profile = savedFormProfile();
-    let changed = false;
-    formProfileFields(container).forEach((field) => {
-      if (!reusableFormField(field)) return;
-      const value = field.type === "checkbox"
-        ? (field.checked ? field.value || "true" : "")
-        : String(field.value || "").trim();
-      if (value) {
-        if (profile[field.name] !== value) {
-          profile[field.name] = value.slice(0, 2_000);
-          changed = true;
-        }
-      } else if (Object.hasOwn(profile, field.name)) {
-        delete profile[field.name];
-        changed = true;
-      }
-    });
-    if (!changed) return;
-    try {
-      localStorage.setItem(FORM_PROFILE_KEY, JSON.stringify(profile));
-    } catch {
-      // Browser privacy settings or storage limits may disable local persistence.
-    }
-  }
-
-  function applySavedFormFields(container) {
-    const profile = savedFormProfile();
-    formProfileFields(container).forEach((field) => {
-      if (
-        !reusableFormField(field)
-        || field.dataset.profileValueSource === "server"
-        || !Object.hasOwn(profile, field.name)
-      ) return;
-      const value = String(profile[field.name]);
-      if (field instanceof HTMLSelectElement) {
-        if ([...field.options].some((option) => option.value === value)) field.value = value;
-        return;
-      }
-      if (field.type === "checkbox") {
-        field.checked = value === (field.value || "true");
-        return;
-      }
-      if (!field.value) field.value = value;
-    });
-  }
-
-  const formProfileObserver = new MutationObserver((records) => {
-    records.forEach((record) => {
-      record.addedNodes.forEach((node) => {
-        if (node instanceof Element) applySavedFormFields(node);
-      });
-    });
-  });
-  formProfileObserver.observe(transcript, { childList: true, subtree: true });
-  transcript.addEventListener("change", (event) => {
-    if (reusableFormField(event.target)) rememberFormFields(event.target);
-  });
+  const retryTurns = new Map();
+  const formProfile = createFormProfile(transcript);
 
   function setStarterSuggestionsVisible(visible) {
     starterSuggestions.hidden = !visible;
@@ -328,6 +232,111 @@ export function createWebchat(root = document, options = {}) {
     error.hidden = false;
   }
 
+  function applyRetainedDetails(form, details = {}) {
+    Object.entries(details).forEach(([name, value]) => {
+      const field = form.querySelector(`[name="${name}"]`);
+      if (field && value !== undefined && value !== null) field.value = value;
+    });
+  }
+
+  function recoveryNotice(message) {
+    const notice = document.createElement("p");
+    notice.className = "webchat-form-error";
+    notice.setAttribute("role", "alert");
+    notice.textContent = message;
+    return notice;
+  }
+
+  function showBookingRecovery(button, error) {
+    const inlineBooking = button.dataset.inlineBooking;
+    const kind = bookingRecoveryKind(error, inlineBooking);
+    if (kind === "none") return false;
+    const workshop = inlineBooking === "workshop";
+    const flow = button.closest(workshop ? "[data-workshop-flow]" : "[data-booking-flow]");
+    if (!flow) return false;
+
+    if (kind === "fields" && flow.selectedSlot) {
+      const detailsForm = workshop
+        ? workshopDetailsForm(flow.selectedSlot)
+        : testDriveDetailsForm(flow.selectedSlot);
+      applyRetainedDetails(detailsForm, flow.contactDetails);
+      flow.replaceChildren(detailsForm);
+      showFieldErrors(detailsForm, error.fieldErrors);
+      clearPending();
+      return true;
+    }
+
+    flow.draftId = null;
+    flow.selectedSlot = null;
+    if (kind === "slot") {
+      const view = error.recovery?.view || { version: 1, items: [] };
+      if (workshop) flow.workshopOptions = view;
+      else flow.testDriveOptions = view;
+      const picker = workshop
+        ? workshopSlotPicker(view, { inline: true })
+        : testDriveSlotPicker(view, { inline: true });
+      flow.replaceChildren(recoveryNotice(error.message), picker);
+      if (!(view.items || []).length) {
+        const closeFlow = document.createElement("button");
+        closeFlow.type = "button";
+        closeFlow.className = "webchat-secondary-action";
+        closeFlow.textContent = workshop ? "Choose another service" : "Choose another vehicle";
+        closeFlow.dataset.chatAction = workshop
+          ? "cancel-inline-workshop"
+          : "cancel-inline-test-drive";
+        flow.append(closeFlow);
+      }
+      clearPending();
+      return true;
+    }
+
+    const recovery = document.createElement("section");
+    recovery.className = "webchat-inline-confirmation";
+    recovery.append(recoveryNotice(error.message));
+    const suggestions = document.createElement("div");
+    suggestions.className = "webchat-suggestions";
+    (error.recovery?.suggestions || []).forEach((suggestion) => {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "webchat-suggestion";
+      choice.textContent = suggestion.label;
+      choice.dataset.chatSuggestion = suggestion.text;
+      if (suggestion.action) {
+        choice.dataset.chatSuggestionAction = JSON.stringify(suggestion.action);
+      }
+      suggestions.append(choice);
+    });
+    const closeFlow = document.createElement("button");
+    closeFlow.type = "button";
+    closeFlow.className = "webchat-secondary-action";
+    closeFlow.textContent = "Close booking";
+    closeFlow.dataset.chatAction = "cancel-inline-test-drive";
+    recovery.append(suggestions, closeFlow);
+    flow.replaceChildren(recovery);
+    clearPending();
+    return true;
+  }
+
+  function showTurnRetry(error, turn, definitiveFailure) {
+    clearPending();
+    const retryId = crypto.randomUUID();
+    retryTurns.set(retryId, retryTurnState(turn, definitiveFailure));
+    const item = renderMessage({
+      role: "assistant",
+      text: error?.message || "That message could not be completed.",
+    });
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "webchat-primary-action";
+    retry.textContent = "Retry";
+    retry.dataset.chatAction = "retry-turn";
+    retry.dataset.retryId = retryId;
+    item.append(retry);
+    setStarterSuggestionsVisible(false);
+    transcript.append(item);
+    transcript.lastElementChild?.scrollIntoView({ block: "nearest" });
+  }
+
   async function cancelInlineTestDrive(button) {
     const flow = button.closest("[data-booking-flow]");
     if (!flow) return;
@@ -482,7 +491,7 @@ export function createWebchat(root = document, options = {}) {
 
   newChat.addEventListener("click", startNewConversation);
 
-  async function sendText(text, action) {
+  async function sendText(text, action, { appendUser = true } = {}) {
     if (!text || send.disabled) return;
     send.disabled = true;
     input.disabled = true;
@@ -491,8 +500,9 @@ export function createWebchat(root = document, options = {}) {
       await ensureConversation();
       if (!pendingClientId) {
         pendingClientId = crypto.randomUUID();
-        appendMessage({ role: "user", text });
+        if (appendUser) appendMessage({ role: "user", text });
       }
+      const attemptedClientId = pendingClientId;
       input.value = "";
       const result = await api.sendTurn(
         conversationId,
@@ -503,19 +513,29 @@ export function createWebchat(root = document, options = {}) {
       );
       const assistant = result.messages.filter((message) => message.role === "assistant");
       assistant.forEach(appendMessage);
-      pendingClientId = null;
       await refreshHistory();
-      if (result.status === "completed") clearPending();
-      else {
-        window.clearInterval(progressTimer);
-        showRequestError({ message: "Please try that message again." });
+      if (result.status === "completed") {
+        pendingClientId = null;
+        clearPending();
+        if (!panel.open && assistant.length) setUnread(unreadCount + assistant.length);
+        return true;
       }
-      if (!panel.open && assistant.length) setUnread(unreadCount + assistant.length);
-      return true;
+      pendingClientId = null;
+      input.value = text;
+      showTurnRetry(
+        { message: "That message could not be completed. Your text has been kept." },
+        { clientMessageId: attemptedClientId, text, action },
+        true,
+      );
+      return false;
     } catch (error) {
       window.clearInterval(progressTimer);
-      showRequestError(error, "Select Send to retry.");
       input.value = text;
+      showTurnRetry(
+        error,
+        { clientMessageId: pendingClientId, text, action },
+        false,
+      );
       return false;
     } finally {
       send.disabled = false;
@@ -562,6 +582,15 @@ export function createWebchat(root = document, options = {}) {
     }
     const button = event.target.closest("[data-chat-action]");
     if (!button || button.disabled) return;
+    if (button.dataset.chatAction === "retry-turn") {
+      const retry = retryTurns.get(button.dataset.retryId);
+      if (!retry) return;
+      retryTurns.delete(button.dataset.retryId);
+      button.disabled = true;
+      pendingClientId = retry.clientMessageId;
+      await sendText(retry.text, retry.action, { appendUser: retry.appendUser });
+      return;
+    }
     button.disabled = true;
     setPending("Working…");
     try {
@@ -617,10 +646,12 @@ export function createWebchat(root = document, options = {}) {
         const flow = button.closest("[data-booking-flow]");
         flow.selectedSlot = {
           slotId: button.dataset.slotId,
+          vehicleId: button.dataset.vehicleId,
           slotLabel: button.dataset.slotLabel,
           dealershipName: button.dataset.dealershipName,
         };
         flow.replaceChildren(testDriveDetailsForm(flow.selectedSlot));
+        applyRetainedDetails(flow.querySelector("[data-test-drive-details]"), flow.contactDetails);
         flow.querySelector("input")?.focus();
         clearPending();
         return;
@@ -629,11 +660,14 @@ export function createWebchat(root = document, options = {}) {
         const flow = button.closest("[data-workshop-flow]");
         flow.selectedSlot = {
           slotId: button.dataset.slotId,
+          serviceTypeId: button.dataset.serviceTypeId,
+          dealershipId: button.dataset.dealershipId,
           slotLabel: button.dataset.slotLabel,
           dealershipName: button.dataset.dealershipName,
           serviceName: button.dataset.serviceName || flow.serviceName,
         };
         flow.replaceChildren(workshopDetailsForm(flow.selectedSlot));
+        applyRetainedDetails(flow.querySelector("[data-workshop-details]"), flow.contactDetails);
         flow.querySelector("input")?.focus();
         clearPending();
         return;
@@ -745,23 +779,19 @@ export function createWebchat(root = document, options = {}) {
         clearPending();
         return;
       } else {
-        await api.cancelDraft(conversationId, button.dataset.draftId);
-        appendMessage({ role: "assistant", text: "That request has been cancelled." });
+        const cancelled = await api.cancelDraft(conversationId, button.dataset.draftId);
+        const confirmation = button.closest(".webchat-confirmation");
+        const standaloneWorkshopFlow = confirmation?.closest(
+          ".webchat-workshop-flow-standalone",
+        );
+        (standaloneWorkshopFlow || confirmation)?.replaceWith(
+          receiptCard(cancelled.result),
+        );
+        clearPending();
+        return;
       }
-      clearPending();
-      button.closest(".webchat-confirmation")
-        ?.querySelectorAll("button")
-        .forEach((action) => { action.disabled = true; });
     } catch (error) {
-      if (button.dataset.inlineBooking === "true" && Object.keys(error.fieldErrors || {}).length) {
-        const flow = button.closest("[data-booking-flow]");
-        flow.replaceChildren(testDriveDetailsForm(flow.selectedSlot));
-        Object.entries(flow.contactDetails || {}).forEach(([name, value]) => {
-          const field = flow.querySelector(`[name="${name}"]`);
-          if (field) field.value = value;
-        });
-        showFieldErrors(flow.querySelector("[data-test-drive-details]"), error.fieldErrors);
-      }
+      if (showBookingRecovery(button, error)) return;
       window.clearInterval(progressTimer);
       showRequestError(error);
       button.disabled = false;
@@ -769,7 +799,7 @@ export function createWebchat(root = document, options = {}) {
   });
 
   transcript.addEventListener("submit", async (event) => {
-    rememberFormFields(event.target);
+    formProfile.remember(event.target);
     const testDriveForm = event.target.closest("[data-test-drive-details]");
     if (testDriveForm) {
       event.preventDefault();
@@ -784,6 +814,7 @@ export function createWebchat(root = document, options = {}) {
         const result = await api.prepareTestDrive(conversationId, {
           ...details,
           slotId: flow.selectedSlot.slotId,
+          vehicleId: flow.selectedSlot.vehicleId,
         });
         flow.replaceChildren(
           inlineTestDriveConfirmation(result.view, flow.selectedSlot.slotLabel),
@@ -814,6 +845,8 @@ export function createWebchat(root = document, options = {}) {
         const result = await api.prepareWorkshopBooking(conversationId, {
           ...details,
           slotId: flow.selectedSlot.slotId,
+          serviceTypeId: flow.selectedSlot.serviceTypeId,
+          dealershipId: flow.selectedSlot.dealershipId,
         });
         flow.replaceChildren(
           inlineWorkshopConfirmation(result.view, flow.selectedSlot, details),

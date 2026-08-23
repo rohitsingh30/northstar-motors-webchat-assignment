@@ -63,6 +63,25 @@ async def test_platform_field_errors_are_preserved() -> None:
 
 
 @pytest.mark.asyncio
+async def test_workshop_reconciliation_read_stays_server_authenticated() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/workshop-bookings/wsb-001"
+        assert request.headers["X-API-Key"] == "secret"
+        return httpx.Response(
+            200,
+            json={"id": "wsb-001", "status": "cancelled", "reference": "WORK-1"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://platform"
+    ) as http:
+        client = DealershipClient("http://platform", "secret", http)
+        result = await client.get_workshop_booking("wsb-001")
+
+    assert result["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_vehicle_image_is_fetched_only_from_platform_asset_path() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/vehicles/veh-001":

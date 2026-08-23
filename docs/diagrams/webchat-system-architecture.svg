@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="950" viewBox="0 0 1600 950" role="img" aria-labelledby="title desc">
+  <title id="title">Northstar webchat system architecture</title>
+  <desc id="desc">The customer browser calls the trusted webchat service. The service coordinates context, AI planning, deterministic tools, workflows, SQLite persistence, and the authoritative dealership platform.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 30px Inter,Arial,sans-serif;fill:#0f172a}.subtitle{font:400 15px Inter,Arial,sans-serif;fill:#475569}
+      .zone{fill:#f8fafc;stroke:#94a3b8;stroke-width:2;stroke-dasharray:8 7}.zone-service{fill:#eff6ff;stroke:#2563eb}
+      .zone-title{font:700 17px Inter,Arial,sans-serif;fill:#0f172a}.box{fill:#fff;stroke:#64748b;stroke-width:1.5;rx:12}.blue{fill:#dbeafe;stroke:#2563eb}.teal{fill:#ccfbf1;stroke:#0f766e}.amber{fill:#fef3c7;stroke:#d97706}.purple{fill:#ede9fe;stroke:#7c3aed}
+      .label{font:700 15px Inter,Arial,sans-serif;fill:#0f172a;text-anchor:middle}.copy{font:400 13px Inter,Arial,sans-serif;fill:#334155;text-anchor:middle}
+      .arrow{fill:none;stroke:#334155;stroke-width:2;marker-end:url(#arrow)}.dashed{stroke-dasharray:6 5}.edge{font:600 12px Inter,Arial,sans-serif;fill:#475569;text-anchor:middle}
+      .legend{font:400 13px Inter,Arial,sans-serif;fill:#334155}
+    </style>
+  </defs>
+  <rect width="1600" height="950" fill="#ffffff"/>
+  <text x="50" y="48" class="title">Northstar Motors webchat — current system architecture</text>
+  <text x="50" y="75" class="subtitle">Semantic planning is followed by deterministic validation, tool routing, workflow state, and authoritative platform data.</text>
+
+  <rect x="35" y="105" width="300" height="745" rx="18" class="zone"/>
+  <text x="55" y="137" class="zone-title">Customer browser · untrusted</text>
+  <rect x="70" y="175" width="230" height="80" class="box"/>
+  <text x="185" y="207" class="label">Dealership website</text><text x="185" y="230" class="copy">Host page and catalogue UI</text>
+  <rect x="70" y="315" width="230" height="135" class="box blue"/>
+  <text x="185" y="347" class="label">Webchat widget</text><text x="185" y="372" class="copy">Web component shell</text><text x="185" y="393" class="copy">controller + core + views</text><text x="185" y="414" class="copy">closed DOM renderers</text>
+  <rect x="70" y="520" width="230" height="120" class="box"/>
+  <text x="185" y="551" class="label">Browser storage</text><text x="185" y="576" class="copy">opaque conversation ID</text><text x="185" y="597" class="copy">open/closed preference</text><text x="185" y="618" class="copy">ordinary form profile</text>
+  <path d="M185 255 L185 305" class="arrow"/><path d="M185 450 L185 510" class="arrow"/>
+
+  <rect x="370" y="105" width="830" height="745" rx="18" class="zone zone-service"/>
+  <text x="390" y="137" class="zone-title">webchat-service · trusted application boundary</text>
+  <rect x="410" y="175" width="215" height="95" class="box blue"/>
+  <text x="518" y="207" class="label">HTTP boundary</text><text x="518" y="232" class="copy">security middleware</text><text x="518" y="253" class="copy">FastAPI routes + schemas</text>
+  <rect x="675" y="175" width="215" height="95" class="box teal"/>
+  <text x="783" y="207" class="label">Orchestrator</text><text x="783" y="232" class="copy">turn lifecycle</text><text x="783" y="253" class="copy">per-conversation lock</text>
+  <rect x="940" y="175" width="215" height="95" class="box purple"/>
+  <text x="1048" y="207" class="label">Provider adapter</text><text x="1048" y="232" class="copy">OpenAI / Azure</text><text x="1048" y="253" class="copy">or deterministic fake planner</text>
+
+  <rect x="410" y="350" width="215" height="110" class="box"/>
+  <text x="518" y="382" class="label">Context builder</text><text x="518" y="407" class="copy">page snapshots</text><text x="518" y="428" class="copy">last 20 messages</text><text x="518" y="449" class="copy">workflow + entity state</text>
+  <rect x="675" y="350" width="215" height="110" class="box purple"/>
+  <text x="783" y="382" class="label">Planning</text><text x="783" y="407" class="copy">V2 domain + goal plan</text><text x="783" y="428" class="copy">SemanticPlanPolicy</text><text x="783" y="449" class="copy">GoalKey → exact tool</text>
+  <rect x="940" y="350" width="215" height="110" class="box teal"/>
+  <text x="1048" y="382" class="label">ToolRegistry</text><text x="1048" y="407" class="copy">strict Pydantic inputs</text><text x="1048" y="428" class="copy">capability handlers</text><text x="1048" y="449" class="copy">closed ToolResult</text>
+
+  <rect x="410" y="550" width="215" height="115" class="box"/>
+  <text x="518" y="582" class="label">Persistence</text><text x="518" y="607" class="copy">repositories + SQLite</text><text x="518" y="628" class="copy">messages, turns, drafts</text><text x="518" y="649" class="copy">attempts + verified grants</text>
+  <rect x="675" y="550" width="215" height="115" class="box amber"/>
+  <text x="783" y="582" class="label">WorkflowService</text><text x="783" y="607" class="copy">draft validation</text><text x="783" y="628" class="copy">explicit confirmation</text><text x="783" y="649" class="copy">idempotency + receipts</text>
+  <rect x="940" y="550" width="215" height="115" class="box teal"/>
+  <text x="1048" y="582" class="label">DealershipClient</text><text x="1048" y="607" class="copy">public reads</text><text x="1048" y="628" class="copy">protected writes</text><text x="1048" y="649" class="copy">safe error normalization</text>
+
+  <path d="M625 222 L665 222" class="arrow"/><path d="M890 222 L930 222" class="arrow"/>
+  <path d="M783 270 L783 340" class="arrow"/><path d="M940 405 L900 405" class="arrow"/>
+  <path d="M890 405 L930 405" class="arrow"/><path d="M675 222 C620 265 570 295 535 340" class="arrow"/>
+  <path d="M518 460 L518 540" class="arrow"/><path d="M783 460 L783 540" class="arrow dashed"/>
+  <path d="M940 440 C880 500 850 520 835 540" class="arrow"/><path d="M890 608 L930 608" class="arrow"/>
+  <path d="M675 608 L635 608" class="arrow"/><path d="M783 270 C720 300 610 305 565 340" class="arrow dashed"/>
+
+  <rect x="1235" y="105" width="330" height="745" rx="18" class="zone"/>
+  <text x="1255" y="137" class="zone-title">External authoritative systems</text>
+  <rect x="1280" y="190" width="240" height="115" class="box purple"/>
+  <text x="1400" y="222" class="label">AI provider</text><text x="1400" y="247" class="copy">OpenAI Responses API</text><text x="1400" y="268" class="copy">or Azure OpenAI</text><text x="1400" y="289" class="copy">semantic plan only</text>
+  <rect x="1280" y="520" width="240" height="135" class="box amber"/>
+  <text x="1400" y="553" class="label">Dealership platform</text><text x="1400" y="578" class="copy">vehicles, offers, hours</text><text x="1400" y="599" class="copy">slots and business records</text><text x="1400" y="620" class="copy">source of truth</text>
+  <path d="M1155 222 L1270 240" class="arrow"/><text x="1210" y="216" class="edge">hosted only</text>
+  <path d="M1155 608 L1270 590" class="arrow"/><text x="1210" y="630" class="edge">HTTP</text>
+  <path d="M300 382 C350 382 365 222 400 222" class="arrow"/><text x="350" y="292" class="edge">JSON + cookie</text>
+
+  <rect x="55" y="885" width="18" height="18" class="blue"/><text x="84" y="899" class="legend">request and coordination boundary</text>
+  <rect x="360" y="885" width="18" height="18" class="purple"/><text x="389" y="899" class="legend">probabilistic or semantic planning</text>
+  <rect x="695" y="885" width="18" height="18" class="teal"/><text x="724" y="899" class="legend">validated deterministic execution</text>
+  <rect x="1040" y="885" width="18" height="18" class="amber"/><text x="1069" y="899" class="legend">business mutation / source of truth</text>
+</svg>

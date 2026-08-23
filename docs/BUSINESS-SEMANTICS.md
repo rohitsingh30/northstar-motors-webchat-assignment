@@ -74,6 +74,10 @@ market conditions.
 
 ## Workshop operations
 
+The published service-type list is the current workshop catalogue. A service absent from that list
+must not be represented as supported. Similar customer wording may be resolved to a unique
+published service, while ambiguous wording requires a choice rather than an invented match.
+
 ### Workshop booking
 
 A created booking has status `confirmed` and the selected slot becomes unavailable.
