@@ -1,6 +1,6 @@
 # Northstar Motors AI Webchat
 
-Live website: [https://scheduling-production-modifications-producers.trycloudflare.com/](https://scheduling-production-modifications-producers.trycloudflare.com/)
+Live website: [https://xhtml-regulation-stopped-labs.trycloudflare.com/](https://xhtml-regulation-stopped-labs.trycloudflare.com/)
 
 This repository contains the supplied Northstar Motors website and dealership platform plus a
 server-side conversational assistant. It helps customers discover vehicles, get accurate

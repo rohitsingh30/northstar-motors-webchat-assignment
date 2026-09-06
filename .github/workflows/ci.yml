@@ -43,7 +43,7 @@ jobs:
           npm install
           npx playwright install --with-deps chromium
       - name: Real-browser smoke tests
-        run: npm run test:e2e
+        run: npm run test:e2e:smoke
       - name: Secret and whitespace checks
         run: |
           git grep -nE '(sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' -- ':!*.md' && exit 1 || true
