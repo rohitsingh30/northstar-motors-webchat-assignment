@@ -214,6 +214,7 @@ class DealershipPlatform:
         exact_filters = {
             "make": "make",
             "model": "model",
+            "colour": "colour",
             "fuelType": "fuel_type",
             "transmission": "transmission",
             "bodyStyle": "body_style",
@@ -224,6 +225,24 @@ class DealershipPlatform:
             if query.get(parameter):
                 clauses.append(f"LOWER({column}) = LOWER(?)")
                 parameters.append(query[parameter])
+        inclusion_filters = {
+            "makes": "make",
+            "models": "model",
+            "colours": "colour",
+            "fuelTypes": "fuel_type",
+            "transmissions": "transmission",
+            "bodyStyles": "body_style",
+        }
+        for parameter, column in inclusion_filters.items():
+            raw_values = query.get(parameter)
+            if not raw_values:
+                continue
+            values = raw_values if isinstance(raw_values, list) else str(raw_values).split(",")
+            cleaned = [str(value).strip() for value in values if str(value).strip()]
+            if not cleaned:
+                continue
+            clauses.append(f"LOWER({column}) IN ({', '.join('?' for _ in cleaned)})")
+            parameters.extend(value.casefold() for value in cleaned)
         if query.get("q"):
             clauses.append(
                 "LOWER(make || ' ' || model || ' ' || variant || ' ' || colour) LIKE LOWER(?)"
@@ -232,8 +251,10 @@ class DealershipPlatform:
         integer_filters = (
             ("minPricePence", "price_pence", ">="),
             ("maxPricePence", "price_pence", "<="),
+            ("minMileage", "mileage", ">="),
             ("maxMileage", "mileage", "<="),
             ("minYear", "year", ">="),
+            ("maxYear", "year", "<="),
         )
         for parameter, column, operator in integer_filters:
             if query.get(parameter):
@@ -247,6 +268,25 @@ class DealershipPlatform:
                     ) from error
                 clauses.append(f"{column} {operator} ?")
                 parameters.append(value)
+        exclusion_filters = {
+            "excludedMakes": "make",
+            "excludedModels": "model",
+            "excludedFuelTypes": "fuel_type",
+            "excludedTransmissions": "transmission",
+            "excludedBodyStyles": "body_style",
+        }
+        for parameter, column in exclusion_filters.items():
+            raw_values = query.get(parameter)
+            if not raw_values:
+                continue
+            values = raw_values if isinstance(raw_values, list) else str(raw_values).split(",")
+            cleaned = [str(value).strip() for value in values if str(value).strip()]
+            if not cleaned:
+                continue
+            clauses.append(
+                f"LOWER({column}) NOT IN ({', '.join('?' for _ in cleaned)})"
+            )
+            parameters.extend(value.casefold() for value in cleaned)
         try:
             page = max(1, int(query.get("page", "1")))
             page_size = min(50, max(1, int(query.get("pageSize", "12"))))
@@ -257,6 +297,7 @@ class DealershipPlatform:
             "priceAsc": "price_pence IS NULL, price_pence ASC",
             "priceDesc": "price_pence IS NULL, price_pence DESC",
             "mileageAsc": "mileage ASC",
+            "mileageDesc": "mileage DESC",
             "newest": "year DESC, updated_at DESC",
         }.get(query.get("sort", "newest"), "year DESC, updated_at DESC")
         where = " AND ".join(clauses)

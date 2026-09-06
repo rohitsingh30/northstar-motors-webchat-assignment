@@ -1,0 +1,14 @@
+{
+  "name": "northstar-conversational-webchat",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:widget": "node --test webchat-service/tests/browser/*.mjs",
+    "test:e2e": "playwright test",
+    "test:real-ai": "REAL_AI_EXHAUSTIVE=1 playwright test webchat-service/tests/e2e/product-brief-real-ai.spec.mjs webchat-service/tests/e2e/conversational.spec.mjs webchat-service/tests/e2e/exhaustive-real-ai.spec.mjs --project=desktop-chromium --workers=1 --grep='REAL AI:|PRODUCT BRIEF real AI:'",
+    "test:real-ai:stress": "REAL_AI_STRESS_RUNS=3 REAL_AI_EXHAUSTIVE=1 playwright test webchat-service/tests/e2e/product-brief-real-ai.spec.mjs webchat-service/tests/e2e/exhaustive-real-ai.spec.mjs --project=desktop-chromium --workers=1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

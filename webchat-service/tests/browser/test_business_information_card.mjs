@@ -7,6 +7,11 @@ class TestElement {
     this.children = [];
     this.className = "";
     this.textContent = "";
+    this.classList = {
+      add: (...tokens) => {
+        this.className = [this.className, ...tokens].filter(Boolean).join(" ");
+      },
+    };
   }
 
   append(...children) {
@@ -20,7 +25,7 @@ globalThis.document = {
   },
 };
 
-const { businessInformationCard } = await import("../../webchat/widget/views/message.js");
+const { businessInformationCard, renderMessage } = await import("../../webchat/widget/views/message.js");
 
 test("scoped business information renders only matched facts", () => {
   const card = businessInformationCard({
@@ -59,4 +64,14 @@ test("stored version 1 business information remains renderable", () => {
       "Privacy: privacy@example.test",
     ],
   );
+});
+
+test("the renderer preserves the grounded assistant answer", () => {
+  const message = renderMessage({
+    role: "assistant",
+    text: "Here is the confirmed finance information.",
+    viewType: "business_information",
+    view: { facts: [{ label: "Finance", value: "Finance is available subject to status." }] },
+  });
+  assert.equal(message.children[0].textContent, "Here is the confirmed finance information.");
 });

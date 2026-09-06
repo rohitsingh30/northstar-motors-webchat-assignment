@@ -1,15 +1,18 @@
-# Google Cloud reviewer deployment
+# Google Cloud private demo deployment
 
 This deployment keeps the existing three-service architecture and SQLite volumes on one Compute
-Engine VM. Only the Nginx gateway is public through Cloudflare; the service ports and model key are
-not exposed.
+Engine VM. Only the Nginx gateway is public through Cloudflare; service ports, protected values,
+and model credentials are not exposed.
 
-The default is a Cloudflare named tunnel with a permanent hostname. A temporary
-`trycloudflare.com` Quick Tunnel remains available only when explicitly requested.
+The deployment-ready default is a Cloudflare named tunnel with an operator-supplied permanent
+hostname. No demo hostname is embedded in the repository. A temporary Quick Tunnel remains
+available only when explicitly requested for local review.
 
-The dealership website and platform images are built unchanged. Nginx rewrites their development
-`localhost` URLs in responses so the browser uses the public same-origin `/api` and `/widget`
-routes. No production integration change is required in either application directory.
+The dealership seed and write semantics are unchanged; the current platform image includes the
+worktree's additive public inventory-query filters documented in the integration guide. The
+editable dealership website is the widget host and contains the vehicle-modal lifecycle bridge.
+Nginx rewrites local development URLs in responses so the browser uses the public same-origin
+`/api` and `/widget` routes without exposing the internal service ports.
 
 ## Defaults
 
@@ -17,7 +20,8 @@ routes. No production integration change is required in either application direc
 - VM: `e2-medium`, Ubuntu 24.04, 30 GB disk
 - Daily AI-backed turns: 250
 - Concurrent AI-backed turns: 3
-- Per-reviewer gateway rate: 12 turns/minute
+- Per-client gateway rate: 12 turns/minute
+- Per-client application mutation rate: 30 requests/minute
 - Conversation retention: 7 days
 
 All values can be overridden with the corresponding environment variables in `compose.yaml`.
@@ -55,7 +59,7 @@ set +a
 ```
 
 The script enables Compute Engine and Secret Manager, stores a new version of the model key, creates
-the VM if needed, uploads the working tree without `.env` or `.git`, and prints the reviewer URL.
+the VM if needed, uploads the working tree without `.env` or `.git`, and prints the private demo URL.
 
 ### Temporary review URL
 

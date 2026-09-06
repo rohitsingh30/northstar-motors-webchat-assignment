@@ -4,11 +4,11 @@ import re
 from typing import Any
 
 from webchat.integrations.contracts import ProviderReply
-from webchat.orchestration.form_prefill import contextual_form_prefill
 
 from .base import clarify, tool
 from .context import ConversationContext
 from .parsers import contact_fields, department, location_query, opening_day, stable_dealership_id
+from .prefill import fake_contextual_prefill
 
 
 class SupportRouter:
@@ -69,7 +69,7 @@ class SupportRouter:
             fields["department"] = selected_department
         if context.active_vehicle and context.refers_to_active_vehicle():
             fields["vehicleId"] = context.active_vehicle
-        fields = contextual_form_prefill(
+        fields = fake_contextual_prefill(
             "prepare_callback",
             fields,
             context.latest,
@@ -82,8 +82,8 @@ class SupportRouter:
         words = context.words
         if "message" not in words:
             return None
-        # The isolated fake router can open the deterministic form, but it must
-        # not treat the workflow command itself as customer-authored content.
+        # The isolated test router can activate protected input, but it must not
+        # treat the workflow command itself as customer-authored content.
         fields = {**contact_fields(context.combined)}
         if "email" in words:
             fields["preferredContactMethod"] = "email"
@@ -93,7 +93,7 @@ class SupportRouter:
             fields["dealershipId"] = dealership_id
         if selected_department := department(words):
             fields["department"] = selected_department
-        fields = contextual_form_prefill(
+        fields = fake_contextual_prefill(
             "prepare_dealership_message",
             fields,
             context.latest,
@@ -171,6 +171,21 @@ class SupportRouter:
     @staticmethod
     def _opening_hours(context: ConversationContext) -> ProviderReply | None:
         words = context.words
+        # A displayed vehicle gives phrases such as "open the second one" a
+        # concrete, trusted referent.  Leave those commands for VehicleRouter;
+        # a bare "is the dealership open?" must continue to mean business hours.
+        displayed_vehicle_navigation = bool(
+            context.displayed_vehicle_ids
+            and "open" in words
+            and re.search(
+                r"^(?:please\s+)?open\b.*\b(?:the\s+)?(?:"
+                r"first|second|third|fourth|[1-4]|one|car|vehicle|details?"
+                r")\b",
+                context.normalized,
+            )
+        )
+        if displayed_vehicle_navigation:
+            return None
         opening_request = bool(words.intersection({"hours", "opening", "holiday"})) or (
             "open" in words and not words.intersection({"car", "cars", "vehicle", "vehicles"})
         )

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: JavaScript syntax and module tests
+        run: |
+          find webchat-service/webchat/widget -name '*.js' -print0 | xargs -0 -n1 node --check
+          node --test webchat-service/tests/browser/*.mjs
+      - name: Compose validation
+        env:
+          NORTHSTAR_API_KEY: ci-key
+          NORTHSTAR_ADMIN_KEY: ci-admin-key
+          LLM_PROVIDER_URL: https://provider.invalid/v1
+          LLM_API_KEY: ci-model-key
+          LLM_MODEL: ci-model
+          REVIEWER_ORIGIN: https://northstar.invalid
+        run: |
+          docker compose config --quiet
+          docker compose -f deployment/gcp/compose.yaml config --quiet
+      - name: Python tests and Ruff
+        run: |
+          docker build --target test -t northstar-webchat-test ./webchat-service
+          docker run --rm northstar-webchat-test pytest -q
+          docker run --rm northstar-webchat-test ruff check webchat tests
+      - name: Compose build
+        run: docker compose build
+      - name: Start seeded stack
+        env:
+          ENVIRONMENT: test
+        run: docker compose up -d --wait
+      - name: Install Chromium smoke runner
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+      - name: Real-browser smoke tests
+        run: npm run test:e2e
+      - name: Secret and whitespace checks
+        run: |
+          git grep -nE '(sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' -- ':!*.md' && exit 1 || true
+          git diff --check
+      - name: Compose logs
+        if: failure()
+        run: docker compose logs --no-color

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from jsonschema import validate as validate_json_schema
@@ -20,14 +20,16 @@ class ToolDefinition:
     title: str
     description: str
     input_model: type[BaseModel]
+    provider_input_model: type[BaseModel] | None = None
     trusted_input_model: type[BaseModel] | None = None
     executor_kind: ExecutorKind = "application"
     executor_reference: str = ""
     invocation: Invocation = "planner"
     risk: Risk = "read"
     preconditions: tuple[str, ...] = ()
+    reference_inputs: tuple[tuple[str, str], ...] = ()
+    candidate_subject_field: str | None = None
     retrieval_examples: tuple[str, ...] = ()
-    allowed_renderers: frozenset[str] = field(default_factory=frozenset)
     result_mode: ResultMode = "render"
     timeout_seconds: float = 12.0
     available: bool = True
@@ -42,6 +44,15 @@ class ToolDefinition:
         schema.pop("title", None)
         return schema
 
+    @property
+    def provider_input_schema(self) -> dict[str, Any]:
+        if self.provider_input_model is None and self.input_schema_override is not None:
+            return self.input_schema_override
+        model = self.provider_input_model or self.input_model
+        schema = model.model_json_schema()
+        schema.pop("title", None)
+        return schema
+
     def validate_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if self.input_schema_override is not None:
             validate_json_schema(arguments, self.input_schema_override)
@@ -51,6 +62,16 @@ class ToolDefinition:
         # arguments. Application handlers remain the sole owners of runtime
         # defaults such as the first result page or the default sort order.
         return validated.model_dump(include=set(arguments), exclude_none=True, exclude_unset=True)
+
+    def validate_provider_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self.provider_input_model is None and self.input_schema_override is not None:
+            validate_json_schema(arguments, self.input_schema_override)
+            return arguments
+        model = self.provider_input_model or self.input_model
+        validated = model.model_validate(arguments)
+        return validated.model_dump(
+            include=set(arguments), exclude_none=True, exclude_unset=True
+        )
 
     def validate_trusted_arguments(self, arguments: dict[str, Any] | None) -> dict[str, Any]:
         if not arguments:
@@ -65,20 +86,6 @@ class ToolDefinition:
             "type": "function",
             "name": self.id,
             "description": self.description,
-            "parameters": self.input_schema,
+            "parameters": self.provider_input_schema,
             "strict": False,
-        }
-
-    def reviewer_view(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "inputSchema": self.input_schema,
-            "risk": self.risk,
-            "preconditions": list(self.preconditions),
-            "retrievalExamples": list(self.retrieval_examples),
-            "allowedRenderers": sorted(self.allowed_renderers),
-            "resultMode": self.result_mode,
-            "outputSchema": self.output_schema,
         }

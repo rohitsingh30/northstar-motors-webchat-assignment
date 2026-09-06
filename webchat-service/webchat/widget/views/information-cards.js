@@ -1,5 +1,5 @@
-import { textElement } from "../core/dom.js";
-import { moneyFromPence } from "../core/format.js";
+import { textElement } from "../core/dom.js?v=20260904.2";
+import { moneyFromPence } from "../core/format.js?v=20260904.2";
 
 // Read-only business results are rendered independently of workflow forms and receipts.
 
@@ -23,42 +23,6 @@ const CARD_FIELDS = [
   ["status", "Status"],
 ];
 
-export function serviceCard(item, { dealershipId = "" } = {}) {
-  const card = document.createElement("article");
-  card.className = "webchat-service-card";
-  const title = document.createElement("div");
-  title.className = "webchat-service-heading";
-  title.append(
-    textElement("h3", "", item.name),
-    textElement(
-      "span",
-      "webchat-service-duration",
-      Number.isInteger(item.durationMinutes) ? `${item.durationMinutes} min` : "Workshop service",
-    ),
-  );
-  card.append(title, textElement("p", "webchat-service-description", item.description));
-  const footer = document.createElement("div");
-  footer.className = "webchat-service-footer";
-  footer.append(
-    textElement(
-      "strong",
-      "webchat-service-price",
-      Number.isInteger(item.priceFromPence) ? `From ${moneyFromPence(item.priceFromPence)}` : "Price on request",
-    ),
-  );
-  if (item.id) {
-    const action = textElement("button", "webchat-primary-action", "Find times");
-    action.type = "button";
-    action.dataset.chatAction = "workshop-service";
-    action.dataset.serviceTypeId = item.id;
-    action.dataset.serviceName = item.name || "Workshop service";
-    if (dealershipId) action.dataset.dealershipId = dealershipId;
-    footer.append(action);
-  }
-  card.append(footer);
-  return card;
-}
-
 export function factCard(value) {
   const card = document.createElement("article");
   card.className = "webchat-card";
@@ -75,6 +39,9 @@ export function offerCard(value, { detailed = false } = {}) {
   card.className = "webchat-card webchat-offer-card";
   const heading = document.createElement("div");
   heading.className = "webchat-offer-heading";
+  if (Number.isInteger(value.optionNumber)) {
+    heading.append(textElement("span", "webchat-option-number", `Option ${value.optionNumber}`));
+  }
   heading.append(textElement("strong", "", value.name || `${value.make || ""} ${value.model || ""}`.trim() || "New-car offer"));
   if (value.productType) heading.append(textElement("span", "webchat-offer-type", value.productType));
   card.append(heading);
@@ -109,38 +76,6 @@ export function offerCard(value, { detailed = false } = {}) {
     );
     card.append(description);
   }
-  const actions = document.createElement("div");
-  actions.className = "webchat-offer-actions";
-  const offerLabel = value.name || value.title || `${value.make || ""} ${value.model || ""}`.trim() || "this offer";
-  if (/^offer-[0-9]{2}$/.test(value.id || "")) {
-    const enquire = textElement("button", "webchat-primary-action", "Send sales enquiry");
-    enquire.type = "button";
-    enquire.dataset.chatAction = "offer-enquiry";
-    enquire.dataset.offerId = value.id;
-    enquire.dataset.offerLabel = offerLabel;
-    enquire.setAttribute("aria-expanded", "false");
-    enquire.setAttribute("aria-label", `Send a sales enquiry about ${offerLabel}`);
-    actions.append(enquire);
-  }
-  if (/^veh-[0-9]{3}$/.test(value.vehicleId || "")) {
-    const viewCar = textElement("a", "webchat-secondary-action", "View car");
-    viewCar.href = `/?vehicle=${encodeURIComponent(value.vehicleId)}`;
-    viewCar.setAttribute("aria-label", `View the car for ${offerLabel}`);
-    viewCar.addEventListener("click", (event) => {
-      const navigation = new CustomEvent("northstar-chat:navigate", {
-        bubbles: true,
-        composed: true,
-        cancelable: true,
-        detail: { type: "vehicle", vehicleId: value.vehicleId, href: viewCar.getAttribute("href") },
-      });
-      if (!viewCar.dispatchEvent(navigation)) event.preventDefault();
-    });
-    actions.append(viewCar);
-  }
-  if (actions.childElementCount) {
-    if (actions.childElementCount === 1) actions.classList.add("is-single");
-    card.append(actions);
-  }
   return card;
 }
 
@@ -149,6 +84,9 @@ export function dealershipCard(value) {
   card.className = "webchat-dealership-card";
   const heading = document.createElement("div");
   heading.className = "webchat-dealership-heading";
+  if (Number.isInteger(value.optionNumber)) {
+    heading.append(textElement("span", "webchat-option-number", `Option ${value.optionNumber}`));
+  }
   heading.append(
     textElement("h3", "", value.name || "Northstar dealership"),
     textElement("span", "webchat-dealership-town", value.town || ""),
@@ -175,19 +113,6 @@ export function dealershipCard(value) {
     value.departments.forEach((department) => chips.append(textElement("span", "", String(department).replace(/^./, (letter) => letter.toUpperCase()))));
     departments.append(chips);
     card.append(departments);
-  }
-  if (/^[a-z0-9-]{2,80}$/.test(value.id || "")) {
-    const actions = document.createElement("div");
-    actions.className = "webchat-dealership-actions webchat-suggestions";
-    const bookService = textElement("button", "webchat-primary-action", "Book a service");
-    bookService.type = "button";
-    bookService.dataset.chatSuggestion = `Book a service at ${value.name || value.town || "this dealership"}`;
-    bookService.dataset.chatSuggestionAction = JSON.stringify({
-      type: "start_dealership_workshop",
-      dealershipId: value.id,
-    });
-    actions.append(bookService);
-    card.append(actions);
   }
   return card;
 }

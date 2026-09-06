@@ -1,4 +1,4 @@
-"""Conservative, customer-authored context carry-over for collecting forms."""
+"""Small deterministic fixtures used only by the isolated fake provider."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class FormTopic:
+class FakeFormTopic:
     subject: str
     message: str
     callback_reason: str
@@ -17,13 +17,13 @@ class FormTopic:
     enquiry_type: str | None = None
 
 
-def contextual_form_prefill(
+def fake_contextual_prefill(
     tool_name: str,
     arguments: dict[str, Any],
     latest_customer_message: str,
     recent_customer_messages: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Fill only a high-confidence topic omitted by a form-opening proposal."""
+    """Support a few repeatable test scenarios without representing production AI."""
     result = dict(arguments)
     topic = _latest_topic(
         [latest_customer_message, *reversed(tuple(recent_customer_messages))]
@@ -47,7 +47,7 @@ def contextual_form_prefill(
     return result
 
 
-def _latest_topic(messages: Iterable[str]) -> FormTopic | None:
+def _latest_topic(messages: Iterable[str]) -> FakeFormTopic | None:
     for message in messages:
         text = " ".join(str(message or "").strip().split())
         normalized = text.casefold()
@@ -56,14 +56,14 @@ def _latest_topic(messages: Iterable[str]) -> FormTopic | None:
         if _contains(normalized, "pickup", "pick up", "collect", "collection") and _contains(
             normalized, "car", "vehicle", "it"
         ):
-            return FormTopic(
+            return FakeFormTopic(
                 "Vehicle collection",
                 "Please confirm whether vehicle collection or home pickup is available.",
                 "Vehicle collection or home pickup",
                 department="sales",
             )
         if _contains(normalized, "part exchange", "part-exchange", "trade in", "trade-in"):
-            return FormTopic(
+            return FakeFormTopic(
                 "Part-exchange enquiry",
                 "Please contact me about a part exchange.",
                 "Discuss a part exchange",
@@ -71,7 +71,7 @@ def _latest_topic(messages: Iterable[str]) -> FormTopic | None:
                 enquiry_type="part-exchange",
             )
         if _contains(normalized, "finance", "pcp", "pch"):
-            return FormTopic(
+            return FakeFormTopic(
                 "Vehicle finance",
                 "Please contact me about vehicle finance.",
                 "Discuss vehicle finance",
@@ -81,7 +81,7 @@ def _latest_topic(messages: Iterable[str]) -> FormTopic | None:
         if _contains(normalized, "availability", "available") and _contains(
             normalized, "car", "vehicle", "model", "it"
         ):
-            return FormTopic(
+            return FakeFormTopic(
                 "Vehicle availability",
                 "Please contact me about vehicle availability.",
                 "Discuss vehicle availability",
@@ -89,14 +89,14 @@ def _latest_topic(messages: Iterable[str]) -> FormTopic | None:
                 enquiry_type="availability",
             )
         if _contains(normalized, "mot", "service", "servicing", "workshop"):
-            return FormTopic(
+            return FakeFormTopic(
                 "Service enquiry",
                 "Please contact me about a service enquiry.",
                 "Discuss a service enquiry",
                 department="service",
             )
         if re.search(r"\bparts?\b", normalized):
-            return FormTopic(
+            return FakeFormTopic(
                 "Parts enquiry",
                 "Please contact me about a parts enquiry.",
                 "Discuss a parts enquiry",

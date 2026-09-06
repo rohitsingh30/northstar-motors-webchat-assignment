@@ -1,39 +1,34 @@
 # Unified tool catalogue
 
-This is the one runtime inventory for application-backed and MCP tools.
+This package is the single inventory for application-backed and optional read-only MCP tools.
 
 | File | Responsibility |
 | --- | --- |
-| `__init__.py` | Public definition/catalogue exports |
-| `contracts.py` | Source-independent `ToolDefinition`, schemas, risk, invocation, renderer, result mode |
-| `definitions.py` | Declarative metadata for all application-backed capabilities |
-| `registry.py` | Registration, filtering, validation, timeout, and dispatch only |
-| `mcp.py` | Streamable HTTP MCP discovery, namespacing, schema preservation, evidence normalization |
+| `contracts.py` | `ToolDefinition`, provider schema, runtime schema, risk/result metadata |
+| `definitions.py` | declarative application capabilities and preconditions |
+| `registry.py` | registration, validation, timeout, and dispatch |
+| `mcp.py` | MCP discovery, namespacing, read-only filtering, evidence normalization |
 
-The catalogue owns what a tool is; executors own how it runs. Definitions may include semantic
-retrieval examples, which improve embedding recall without becoming keyword routes or confidence
-thresholds. `planner_tools()` exposes only available planner operations and excludes confirmed
-writes. Every execution revalidates arguments and uses the definition's timeout.
+Each workflow tool has a provider-public input model and, where necessary, a richer runtime model.
+Policy validates the public model first, then injects only server-trusted IDs/metadata and validates
+the runtime model. Protected fields never appear in planner schemas. Confirmed mutation tools are
+not planner-visible.
 
-`search_vehicles` starts a new inventory query. `refine_vehicle_search` updates the current
-server-owned query and preserves every omitted filter, so the model never has to reconstruct search
-state from transcript text.
+Execution-only metadata stays outside both argument schemas. A protected draft replacement ID is
+validated by the HTTP/state boundary, then catalogue dispatch forwards it to the workflow executor
+without exposing it to planning. Workshop, test-drive, enquiry, callback, message, vehicle-interest,
+and part-exchange replacements all use this path.
 
-`list_workshop_slots` starts a slot search. `refine_workshop_slots` changes its service, location,
-or dates while preserving omitted constraints. Supplying a new service replaces the old service
-identity instead of combining incompatible IDs and names.
+`ToolDefinition.reference_inputs` declares how resolved trusted entity references bind to generic
+provider fields such as `id`. Startup validation requires every declared field to exist in the
+provider schema and every namespace to belong to the shared reference vocabulary. Planning
+preflight therefore never infers entity types from tool names, policy-condition names, or customer
+phrasing.
 
-Dealership capabilities keep cardinality explicit: `list_dealership_departments` covers every
-location, `find_dealership_departments` covers a named or sole current location, list-hours preserves
-a multi-location set, and singular dealership-ID reads cannot select one arbitrary item from a set.
-Regular weekly schedules use `list_opening_hours`; published bank-holiday and other exceptions use
-`list_holiday_opening_hours`, preventing a holiday request from being inferred as a weekday query.
-`show_dealership_contact_options` is the safe executable continuation when a customer accepts an
-offer of contact help without choosing callback, message, details, or opening hours.
+Search/refinement tools preserve omitted server-owned filters. Dealership/service cardinality is
+explicit. Workshop service resolution produces `matched`, `ambiguous`, or `unavailable`; semantic
+retrieval does not convert similarity into a business match.
 
-Internal browser operations also live in this catalogue but are excluded from `planner_tools()`.
-`request_offer_enquiry_form` opens the inline offer enquiry form without persisting or submitting a
-draft; `prepare_sales_enquiry` creates the validated server-side draft after the form is completed.
-
-MCP tools are namespaced as `mcp__{server}__{tool}`. Only tools explicitly annotated read-only are
-planner-visible. Remote mutation tools require a future application confirmation workflow.
+Some internal identifiers such as `request_offer_enquiry_form` are retained for request
+compatibility. They now activate the corresponding capability/protected boundary and do not render
+or open an HTML form.

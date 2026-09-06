@@ -1,15 +1,8 @@
 // Stable workflow-renderer facade. Each module owns one UI responsibility.
-export { confirmationCard } from "./workflow-confirmations.js";
-export {
-  draftCard,
-  inlineOfferEnquiryForm,
-  partExchangeEstimateForm,
-  setOfferEnquiryActionState,
-} from "./workflow-forms.js";
+export { confirmationCard } from "./workflow-confirmations.js?v=20260906.1";
 export {
   businessInformationCard,
   partExchangeEstimateCard,
-  privateLookupForm,
   receiptCard,
   workshopBookingDetailsCard,
-} from "./workflow-receipts.js";
+} from "./workflow-receipts.js?v=20260904.2";

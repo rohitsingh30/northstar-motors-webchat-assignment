@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,6 +8,7 @@ from webchat.domain.workflows import WorkflowService
 from webchat.integrations.dealership import DealershipError
 from webchat.persistence.database import Database
 from webchat.persistence.repositories import ConversationRepository, WorkflowRepository
+from webchat.persistence.repositories.workflows import StaleWorkflowDraftError
 
 
 class FakeDealership:
@@ -92,6 +94,75 @@ def setup(tmp_path: Path):
     dealership = FakeDealership()
     dealership.calls = []
     return conversation["id"], WorkflowService(repository, dealership), dealership
+
+
+def test_review_replacement_consumes_the_expected_draft_once(tmp_path: Path) -> None:
+    conversation_id, workflows, _ = setup(tmp_path)
+    fields = {
+        **contact(),
+        "vehicleId": "veh-001",
+        "slotId": "td-slot-0001",
+    }
+    reviewed = workflows.prepare(conversation_id, "test_drive", fields)
+
+    replacement = workflows.prepare(
+        conversation_id,
+        "test_drive",
+        {**fields, "lastName": "Morgan"},
+        expected_draft_id=reviewed.id,
+    )
+
+    assert workflows.repository.statuses(conversation_id, [reviewed.id, replacement.id]) == {
+        reviewed.id: "cancelled",
+        replacement.id: "awaiting_confirmation",
+    }
+    with pytest.raises(StaleWorkflowDraftError):
+        workflows.prepare(
+            conversation_id,
+            "test_drive",
+            {**fields, "lastName": "Taylor"},
+            expected_draft_id=reviewed.id,
+        )
+    assert workflows.repository.latest_active(conversation_id)["id"] == replacement.id
+
+
+def test_reselecting_a_transaction_subject_clears_only_dependent_draft_fields(
+    tmp_path: Path,
+) -> None:
+    conversation_id, workflows, _ = setup(tmp_path)
+    first = workflows.prepare(
+        conversation_id,
+        "test_drive",
+        {
+            **contact(),
+            "vehicleId": "veh-042",
+            "slotId": "td-slot-0001",
+            "selectedStartsAt": "2026-09-07T09:00:00Z",
+            "selectedDealershipId": "northstar-stockport",
+            "selectedDealershipName": "Northstar Stockport",
+        },
+    )
+
+    replacement = workflows.prepare(
+        conversation_id,
+        "test_drive",
+        {},
+        clear_fields=(
+            "vehicleId",
+            "slotId",
+            "selectedStartsAt",
+            "selectedDealershipId",
+            "selectedDealershipName",
+        ),
+    )
+
+    assert replacement.id != first.id
+    assert replacement.status == "collecting"
+    assert "vehicleId" not in replacement.summary
+    assert "slotId" not in replacement.summary
+    persisted = workflows.repository.latest_active(conversation_id, "test_drive")
+    fields = json.loads(persisted["fields_json"])
+    assert fields == contact()
 
 
 @pytest.mark.asyncio
@@ -258,6 +329,9 @@ async def test_new_bookings_recheck_selected_vehicle_and_slots_before_creation(
             **contact(),
             "vehicleId": "veh-001",
             "slotId": "td-slot-0001",
+            "selectedStartsAt": "2026-08-22T09:00:00Z",
+            "selectedDealershipId": "northstar-manchester",
+            "selectedDealershipName": "Northstar Manchester",
         },
     )
     workshop = workflows.prepare(
@@ -270,6 +344,11 @@ async def test_new_bookings_recheck_selected_vehicle_and_slots_before_creation(
             "dealershipId": "northstar-manchester",
             "registration": "AB12 CDE",
             "mileage": 42000,
+            "selectedStartsAt": "2026-08-22T10:00:00Z",
+            "selectedDealershipId": "northstar-manchester",
+            "selectedDealershipName": "Northstar Manchester",
+            "selectedServiceTypeId": "full-service",
+            "selectedServiceName": "Full service",
         },
     )
 
@@ -309,8 +388,10 @@ async def test_new_bookings_recheck_selected_vehicle_and_slots_before_creation(
         call for call in dealership.calls if call[0] == "create_workshop_booking"
     )
     assert "vehicleId" not in test_create[1]
+    assert not any(key.startswith("selected") for key in test_create[1])
     assert "serviceTypeId" not in workshop_create[1]
     assert "dealershipId" not in workshop_create[1]
+    assert not any(key.startswith("selected") for key in workshop_create[1])
 
 
 @pytest.mark.asyncio
@@ -365,6 +446,12 @@ async def test_booking_rechecks_return_vehicle_and_fresh_slot_recovery(
     assert unavailable.value.code == "SLOT_UNAVAILABLE"
     assert unavailable.value.recovery["journey"] == "workshop"
     assert unavailable.value.recovery["view"]["items"][0]["id"] == "ws-slot-0002"
+    assert unavailable.value.recovery["alternativeOffer"]["reasonCode"] == (
+        "selected_appointment_no_longer_available"
+    )
+    assert unavailable.value.recovery["alternativeOffer"]["candidateReferences"] == [
+        "appointment:ws-slot-0002"
+    ]
 
 
 @pytest.mark.asyncio
@@ -411,6 +498,7 @@ async def test_atomic_slot_conflict_refreshes_test_drive_options(
     assert unavailable.value.recovery["view"]["items"] == [
         {"id": "td-slot-0002", "vehicleId": "veh-001"}
     ]
+    assert unavailable.value.recovery["alternativeOffer"]["requiresCustomerAcceptance"] is True
     assert dealership.slot_reads == 2
 
 

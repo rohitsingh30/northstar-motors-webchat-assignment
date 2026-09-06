@@ -6,56 +6,17 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
+from webchat.domain.capabilities import CapabilityRegistry
 from webchat.integrations.dealership import DealershipClient, DealershipError
 from webchat.persistence.repositories import WorkflowRepository
 
 REQUIRED_FIELDS: dict[str, set[str]] = {
-    "sales_enquiry": {
-        "dealershipId",
-        "enquiryType",
-        "message",
-        "firstName",
-        "lastName",
-        "email",
-        "phone",
-    },
-    "test_drive": {"slotId", "vehicleId", "firstName", "lastName", "email", "phone"},
-    "vehicle_interest": {"vehicleId", "firstName", "lastName", "email", "phone"},
-    "callback": {"dealershipId", "department", "reason", "firstName", "lastName", "email", "phone"},
-    "workshop_booking": {
-        "slotId",
-        "serviceTypeId",
-        "dealershipId",
-        "registration",
-        "mileage",
-        "firstName",
-        "lastName",
-        "email",
-        "phone",
-    },
+    kind: set(spec.required_fields)
+    for kind, spec in CapabilityRegistry.SPECS.items()
+    if kind not in {"booking_lookup", "part_exchange_estimate"}
+} | {
     "workshop_amend": {"verifiedGrantId"},
     "workshop_cancel": {"verifiedGrantId"},
-    "dealership_message": {
-        "dealershipId",
-        "department",
-        "subject",
-        "message",
-        "preferredContactMethod",
-        "firstName",
-        "lastName",
-        "email",
-        "phone",
-    },
-    "part_exchange": {
-        "dealershipId",
-        "registration",
-        "mileage",
-        "condition",
-        "firstName",
-        "lastName",
-        "email",
-        "phone",
-    },
 }
 
 
@@ -110,10 +71,48 @@ class WorkflowService:
             "part_exchange": "create_part_exchange",
         }
 
-    def prepare(self, conversation_id: str, kind: str, fields: dict[str, Any]) -> PreparedDraft:
+    def prepare(
+        self,
+        conversation_id: str,
+        kind: str,
+        fields: dict[str, Any],
+        *,
+        expected_draft_id: str | None = None,
+        clear_fields: tuple[str, ...] = (),
+    ) -> PreparedDraft:
         if kind not in REQUIRED_FIELDS:
             raise ValueError("Unsupported workflow kind")
-        cleaned = {key: value for key, value in fields.items() if value not in (None, "")}
+        supplied = {key: value for key, value in fields.items() if value not in (None, "")}
+        previous = self.repository.latest_active(conversation_id, kind)
+        previous_fields = (
+            json.loads(previous.get("fields_json") or "{}") if previous is not None else {}
+        )
+        allowed_clear_fields = {
+            "vehicleId",
+            "slotId",
+            "selectedStartsAt",
+            "selectedDealershipId",
+            "selectedDealershipName",
+            "selectedServiceTypeId",
+            "selectedServiceName",
+            "serviceTypeId",
+            "dealershipId",
+        }
+        if not set(clear_fields).issubset(allowed_clear_fields):
+            raise ValueError("Unsupported workflow field reset")
+        retained = dict(previous_fields) if isinstance(previous_fields, dict) else {}
+        for field in clear_fields:
+            retained.pop(field, None)
+        cleaned = {
+            **retained,
+            **supplied,
+        }
+        # A trusted appointment slot owns its dealership. Requiring a second dealership
+        # selection after the slot was chosen creates contradictory workflow state.
+        if kind == "workshop_booking" and cleaned.get("selectedDealershipId"):
+            if cleaned.get("dealershipId") not in {None, cleaned["selectedDealershipId"]}:
+                raise ValueError("the selected appointment belongs to another dealership")
+            cleaned["dealershipId"] = cleaned["selectedDealershipId"]
         verified_snapshot: dict[str, Any] = {}
         if kind in {"workshop_amend", "workshop_cancel"} and "verifiedGrantId" not in cleaned:
             grant = self.repository.latest_grant(conversation_id)
@@ -127,7 +126,12 @@ class WorkflowService:
             missing.append("one of slotId, mileage, or notes")
         status = "collecting" if missing else "awaiting_confirmation"
         draft = self.repository.create_or_replace(
-            conversation_id, kind, cleaned, material_hash(kind, cleaned), status
+            conversation_id,
+            kind,
+            cleaned,
+            material_hash(kind, cleaned),
+            status,
+            expected_draft_id=expected_draft_id,
         )
         summary = self.safe_summary(kind, cleaned)
         if verified_snapshot:
@@ -143,19 +147,63 @@ class WorkflowService:
             summary = {key: value for key, value in summary.items() if value is not None}
         return PreparedDraft(draft["id"], kind, status, missing, summary)
 
+    def cancel_active(self, conversation_id: str) -> dict[str, Any]:
+        draft = self.repository.latest_active(conversation_id)
+        if draft is None:
+            return {"cancelled": False}
+        cancelled = self.repository.cancel(conversation_id, str(draft["id"]))
+        return {"cancelled": True, "kind": cancelled["kind"]}
+
     @staticmethod
     def safe_summary(kind: str, fields: dict[str, Any]) -> dict[str, Any]:
-        # Contact details are deliberately summarized, not echoed into a confirmation card.
+        # Persist public conversational values and trusted operational selectors only. Contact,
+        # registration, mileage, condition, and booking proof stay in the secure channel.
         contact_fields = {"firstName", "lastName", "email", "phone"}
-        hidden = contact_fields | {
-            "verifiedGrantId",
-            "selectedStartsAt",
-            "selectedDealershipId",
-            "selectedDealershipName",
-            "selectedServiceTypeId",
-            "selectedServiceName",
+        allowed_by_kind = {
+            "sales_enquiry": {"vehicleId", "dealershipId", "enquiryType", "message"},
+            "test_drive": {
+                "vehicleId",
+                "slotId",
+                "selectedStartsAt",
+                "selectedDealershipId",
+                "selectedDealershipName",
+            },
+            "vehicle_interest": {"vehicleId", "notes"},
+            "callback": {"dealershipId", "department", "reason", "preferredTime", "vehicleId"},
+            "workshop_booking": {
+                "slotId",
+                "serviceTypeId",
+                "dealershipId",
+                "notes",
+                "selectedStartsAt",
+                "selectedDealershipId",
+                "selectedDealershipName",
+                "selectedServiceTypeId",
+                "selectedServiceName",
+            },
+            "workshop_amend": {
+                "slotId",
+                "selectedStartsAt",
+                "selectedDealershipId",
+                "selectedDealershipName",
+                "selectedServiceTypeId",
+                "selectedServiceName",
+            },
+            "workshop_cancel": set(),
+            "dealership_message": {
+                "dealershipId",
+                "department",
+                "subject",
+                "message",
+                "preferredContactMethod",
+            },
+            "part_exchange": {"dealershipId"},
         }
-        summary = {key: value for key, value in fields.items() if key not in hidden}
+        summary = {
+            key: value
+            for key, value in fields.items()
+            if key in allowed_by_kind.get(kind, set())
+        }
         summary["contactProvided"] = all(fields.get(key) for key in contact_fields)
         summary["kind"] = kind
         return summary
@@ -229,7 +277,6 @@ class WorkflowService:
             "dealershipName",
             "vehicleLabel",
             "serviceName",
-            "registration",
             "estimateLowPence",
             "estimateHighPence",
             "estimateNotice",
@@ -280,7 +327,15 @@ class WorkflowService:
         selected_slot = _find_slot(slots, slot_id)
         if selected_slot is None:
             raise self._slot_unavailable_error("test_drive", slots, vehicle_id=vehicle_id)
-        payload = {key: value for key, value in fields.items() if key != "vehicleId"}
+        presentation_only = {
+            "vehicleId",
+            "selectedStartsAt",
+            "selectedDealershipId",
+            "selectedDealershipName",
+            "selectedServiceTypeId",
+            "selectedServiceName",
+        }
+        payload = {key: value for key, value in fields.items() if key not in presentation_only}
         try:
             result = dict(await self.dealership.create_test_drive(payload, idempotency_key))
             result.setdefault("vehicleId", vehicle_id)
@@ -321,10 +376,19 @@ class WorkflowService:
         selected_slot = _find_slot(slots, slot_id)
         if selected_slot is None:
             raise self._slot_unavailable_error("workshop", slots)
+        presentation_only = {
+            "serviceTypeId",
+            "dealershipId",
+            "selectedStartsAt",
+            "selectedDealershipId",
+            "selectedDealershipName",
+            "selectedServiceTypeId",
+            "selectedServiceName",
+        }
         payload = {
             key: value
             for key, value in fields.items()
-            if key not in {"serviceTypeId", "dealershipId"}
+            if key not in presentation_only
         }
         try:
             result = dict(await self.dealership.create_workshop_booking(payload, idempotency_key))
@@ -351,11 +415,36 @@ class WorkflowService:
         view = {"version": 1, "items": list(slots.get("items", []))}
         if vehicle_id:
             view["vehicleId"] = vehicle_id
+        candidate_references = [
+            f"appointment:{item['id']}"
+            for item in view["items"]
+            if isinstance(item, dict) and item.get("id")
+        ]
         return DealershipError(
             409,
             "SLOT_UNAVAILABLE",
             "That appointment is no longer available. Please choose another current time.",
-            recovery={"journey": journey, "viewType": view_type, "view": view},
+            recovery={
+                "journey": journey,
+                "viewType": view_type,
+                "view": view,
+                "alternativeOffer": {
+                    "reasonCode": "selected_appointment_no_longer_available",
+                    "requestedOutcome": "The previously selected appointment",
+                    "failureReason": "That appointment is no longer available.",
+                    "offeredOutcome": "Choose another current appointment from the refreshed options.",
+                    "changes": [
+                        {
+                            "dimension": "Appointment",
+                            "requested": "the previously selected appointment",
+                            "offered": "a new current appointment selected by the customer",
+                        }
+                    ],
+                    "preserved": [journey.replace("_", " ").title()],
+                    "candidateReferences": candidate_references,
+                    "requiresCustomerAcceptance": True,
+                },
+            },
         )
 
     @staticmethod

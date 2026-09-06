@@ -13,19 +13,34 @@ const controls = {
 
 const dialog = document.querySelector("#vehicle-dialog");
 const detailContainer = document.querySelector("#vehicle-detail");
+let activeChatInteractionId = null;
+let externalVehicleModalOpen = false;
 
-function openVehicle(vehicleId, updateUrl = true) {
+async function openVehicle(vehicleId, updateUrl = true, chatInteractionId = null) {
+  activeChatInteractionId = chatInteractionId;
+  externalVehicleModalOpen = !chatInteractionId;
+  if (externalVehicleModalOpen) {
+    window.dispatchEvent(new CustomEvent("northstar-chat:vehicle-modal-opened-externally"));
+  }
   if (updateUrl) {
     const url = new URL(window.location);
     url.searchParams.set("vehicle", vehicleId);
     url.hash = "vehicles";
     window.history.pushState({ vehicleId }, "", url);
   }
-  return showVehicleDetail({
+  const outcome = await showVehicleDetail({
     vehicleId,
     dialog,
     container: detailContainer,
   });
+  if (!outcome.ok && activeChatInteractionId) {
+    window.dispatchEvent(new CustomEvent("northstar-chat:vehicle-modal-failed", {
+      detail: { interactionId: activeChatInteractionId, reason: outcome.reason },
+    }));
+    activeChatInteractionId = null;
+    dialog.close();
+  }
+  return outcome;
 }
 
 const inventory = createInventory({
@@ -75,6 +90,15 @@ dialog.addEventListener("click", (event) => {
   }
 });
 dialog.addEventListener("close", () => {
+  if (activeChatInteractionId) {
+    window.dispatchEvent(new CustomEvent("northstar-chat:vehicle-modal-closed", {
+      detail: { interactionId: activeChatInteractionId },
+    }));
+    activeChatInteractionId = null;
+  } else if (externalVehicleModalOpen) {
+    window.dispatchEvent(new CustomEvent("northstar-chat:vehicle-modal-closed-externally"));
+  }
+  externalVehicleModalOpen = false;
   const url = new URL(window.location);
   url.searchParams.delete("vehicle");
   window.history.replaceState(null, "", url);
@@ -82,7 +106,7 @@ dialog.addEventListener("close", () => {
 window.addEventListener("popstate", () => {
   const vehicleId = new URL(window.location).searchParams.get("vehicle");
   if (vehicleId) {
-    openVehicle(vehicleId, false);
+    openVehicle(vehicleId, false, window.history.state?.northstarChatInteractionId || null);
   } else if (dialog.open) {
     dialog.close();
   }
@@ -95,5 +119,9 @@ renderLocations(document.querySelector("#location-list"));
 
 const linkedVehicleId = new URL(window.location).searchParams.get("vehicle");
 if (linkedVehicleId) {
-  openVehicle(linkedVehicleId, false);
+  openVehicle(
+    linkedVehicleId,
+    false,
+    window.history.state?.northstarChatInteractionId || null,
+  );
 }

@@ -28,9 +28,18 @@ from .persistence.database import Database
 from .persistence.repositories import (
     ConversationRepository,
     MessageRepository,
+    ProtectedInteractionRepository,
+    TurnCommitRepository,
     TurnRepository,
     WorkflowRepository,
 )
+
+
+class RevalidatedWidgetFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def create_app(settings: Settings | None = None, provider: LlmProvider | None = None) -> FastAPI:
@@ -47,6 +56,8 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
         app.state.conversations = ConversationRepository(database)
         app.state.conversations.expire_old()
         app.state.messages = MessageRepository(database)
+        app.state.protected_interactions = ProtectedInteractionRepository(database)
+        app.state.turn_commit = TurnCommitRepository(database)
         app.state.turns = TurnRepository(database)
         app.state.turn_admission = TurnAdmission(
             app.state.turns,
@@ -84,8 +95,17 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
                     runtime_settings.llm_turn_timeout_seconds - 1.0,
                 ),
             )
-        selected_provider = selected_provider or FakeLlmProvider()
+        if selected_provider is None:
+            if runtime_settings.environment != "test":
+                # validate_runtime() rejects this state before application startup. Keep this
+                # guard here as a second boundary so a production/development process can never
+                # silently impersonate the conversational agent with the deterministic test fake.
+                raise ValueError("Hosted LLM configuration is required outside tests")
+            selected_provider = FakeLlmProvider()
         app.state.provider = selected_provider
+        app.state.assistant_mode = (
+            "limited_demo" if isinstance(selected_provider, FakeLlmProvider) else "hosted"
+        )
         app.state.orchestrator = Orchestrator(
             app.state.messages,
             app.state.turns,
@@ -93,6 +113,10 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
             app.state.tools,
             app.state.conversations,
             timeout_seconds=runtime_settings.llm_turn_timeout_seconds,
+            workflows=app.state.workflows,
+            workflow_repository=app.state.workflow_repository,
+            protected_interactions=app.state.protected_interactions,
+            turn_commit=app.state.turn_commit,
         )
         app.state.database_ready = True
         yield
@@ -118,7 +142,7 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
     )
     application.mount(
         "/widget",
-        StaticFiles(directory=Path(__file__).resolve().parent / "widget"),
+        RevalidatedWidgetFiles(directory=Path(__file__).resolve().parent / "widget"),
         name="northstar-chat-widget",
     )
     application.include_router(conversation_router)
@@ -133,6 +157,7 @@ def create_app(settings: Settings | None = None, provider: LlmProvider | None = 
         return {
             "status": "ready" if database_ready else "not_ready",
             "checks": {"database": "ok" if database_ready else "unavailable"},
+            "assistantMode": getattr(application.state, "assistant_mode", "unavailable"),
         }
 
     return application

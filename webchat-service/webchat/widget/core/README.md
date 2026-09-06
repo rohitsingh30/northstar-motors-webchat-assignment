@@ -1,20 +1,18 @@
 # Widget core modules
 
-Core modules contain browser infrastructure shared by the controller and renderers.
-
-## Files
-
 | File | Responsibility |
 | --- | --- |
-| [`api.js`](./api.js) | Credentialed JSON requests for every public webchat endpoint; normalize problem/validation errors |
-| [`context.js`](./context.js) | Validate host context and collect bounded URL/page text/dialog/control/entity snapshots |
-| [`dom.js`](./dom.js) | Create elements with text content at one small safe boundary |
-| [`form-profile.js`](./form-profile.js) | Save/prefill reusable identity/contact fields and ordinary vehicle registration; discard workflow content, choices, and private lookup proof |
-| [`form-state.js`](./form-state.js) | Render/clear field errors and restore retained form values |
-| [`form-submit.js`](./form-submit.js) | Map each closed workflow form to its deterministic preparation endpoint |
-| [`format.js`](./format.js) | Format integer pence as `en-GB` GBP or return `null` for unknown values |
-| [`recovery.js`](./recovery.js) | Classify booking failures and preserve or replace client-message IDs safely during turn retry |
+| `api.js` | credentialed strict JSON requests, safe error normalization, and pending-request aborts |
+| `context.js` | bounded validated host/page context |
+| `dom.js` | small safe DOM creation boundary |
+| `format.js` | `en-GB` GBP formatting |
+| `recovery.js` | retry classification and safe client-message-ID reuse/replacement |
+| `widget-state.js` | explicit closed/open/busy/unread/error/unavailable/restored lifecycle |
+| `workflow-specs.js` | protected-only field specifications per capability |
+| `workflow-fields.js` | protected deterministic parsing/validation/masking |
+| `workflow-conversation.js` | protected per-conversation session reducer, natural privacy commands/steering boundary, and one-shot payload construction |
 
-Core modules must not contain feature-card layout. Put new card/form rendering in `views`; keep
-conversation/action sequencing in `webchat.js` and deterministic form submission in
-`form-submit.js`.
+Core modules do not resolve public business meaning or select public workflow steps. The protected
+reducer recognizes only bounded privacy commands/corrections and likely public steering; `webchat.js`
+sends the untouched public text to the AI turn path. Protected values never enter `localStorage`,
+`/turns`, or the persisted transcript.

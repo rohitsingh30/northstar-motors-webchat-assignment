@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from webchat.orchestration.catalogue import UnifiedToolCatalog
-
-DEFAULT_RENDERERS = frozenset(
+SUPPORTED_TOOL_RESULT_VIEWS = frozenset(
     {
         "business_information",
+        "choice_list",
         "confirmation",
         "dealership_list",
         "draft",
@@ -28,23 +27,10 @@ DEFAULT_RENDERERS = frozenset(
 
 
 class RendererRegistry:
-    """Validate that tool results use application-owned renderer contracts."""
+    """Reject unknown tool-result views without maintaining a tool-to-view matrix."""
 
-    def __init__(self, catalogue: UnifiedToolCatalog | None = None):
-        self._catalogue = catalogue
-        self._renderers = (
-            {
-                renderer
-                for definition in catalogue.definitions()
-                for renderer in definition.allowed_renderers
-            }
-            if catalogue is not None
-            else set(DEFAULT_RENDERERS)
-        )
-
-    def can_render(self, tool_name: str | None, result) -> bool:
+    @staticmethod
+    def can_render(result) -> bool:
         if result.view_payload is None or result.view_type is None:
             return False
-        if self._catalogue is None or tool_name is None:
-            return result.view_type in self._renderers
-        return result.view_type in self._catalogue.get(tool_name).allowed_renderers
+        return result.view_type in SUPPORTED_TOOL_RESULT_VIEWS

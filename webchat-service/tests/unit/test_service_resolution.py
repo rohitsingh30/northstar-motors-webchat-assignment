@@ -4,6 +4,11 @@ from webchat.orchestration.tools.service_resolution import resolve_live_service
 
 SERVICES = [
     {
+        "id": "brake-inspection",
+        "name": "Brake inspection",
+        "description": "Brake condition and performance inspection.",
+    },
+    {
         "id": "full-service",
         "name": "Full service",
         "description": "Comprehensive annual vehicle service.",
@@ -28,6 +33,8 @@ SERVICES = [
         ("How long would a warning-light diagnosis take?", "diagnostic"),
         ("What does the annual maintenance include?", "full-service"),
         ("I want to do tyres", "tyre-fitting"),
+        ("brakes", "brake-inspection"),
+        ("please check my brake pads", "brake-inspection"),
     ],
 )
 def test_arbitrary_service_wording_resolves_against_live_catalogue(
@@ -43,7 +50,7 @@ def test_arbitrary_service_wording_resolves_against_live_catalogue(
 def test_unknown_service_is_distinct_from_an_ambiguous_match() -> None:
     resolution = resolve_live_service(SERVICES, "Do you do car cleaning?")
 
-    assert resolution.status == "unsupported"
+    assert resolution.status == "unavailable"
     assert resolution.service is None
 
 

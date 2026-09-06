@@ -1,4 +1,4 @@
-name: northstar-review
+name: northstar-conversational-webchat
 
 services:
   dealership-platform:

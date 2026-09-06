@@ -1,35 +1,22 @@
-# Proposal and review contracts
+# Planning contracts
 
-This package contains only hosted semantic policies and the independent review contract. Concrete
-tool definitions belong to `../catalogue/`; workflow state belongs to `../state.py`.
-
-| File | Responsibility |
+| File | Runtime responsibility |
 | --- | --- |
-| `__init__.py` | Public exports |
-| `prompt.py` | Planner and reviewer system policies; inject retrieved evidence |
-| `review.py` | Outcome-specific review functions, citations, deterministic revalidation, safe fallback |
+| `affordances.py` | side-effect-free policy preflight that narrows planning to legal progress operations and grants generic clarification only when progress is blocked |
+| `prompt.py` | hosted planner and grounded-composer policies |
 
-The planner must call a retrieved business tool, `answer_from_knowledge`, `respond_socially`, or a
-pending-interaction accept/decline capability exposed only when an actionable interaction exists.
-Knowledge answers are materialized from selected customer evidence, while social replies come from
-fixed application copy; the planner cannot author arbitrary customer text or clarification. The
-reviewer is a separate stateless provider request with a different prompt, envelope, and four small
-outcome-specific functions. It sees the complete executable catalogue and may correct a missed
-first-pass candidate.
+The production hosted provider makes a planning request and, after tool execution, a composition
+request. Deterministic schemas, affordances, policy, and grounding validate those phases; there is
+no independent reviewer request or reviewer compatibility interface.
 
-Rules:
-
-- No hosted proposal executes without `ProposalReview` provenance.
-- Corrected calls pass through catalogue schema and risk validation again.
-- Text citations must refer to retrieved customer-audience evidence; the application owns the text.
-- Reviewer clarification must identify exact required schema fields or declared preconditions.
-- Finite clarification choices are explicit structured options; selecting one starts another fully
-  reviewed turn and never bypasses tool policy.
-- Interaction decisions require persisted metadata from the immediately preceding assistant
-  response. They contain no action arguments; the server resolves only the stored typed action.
-- The reviewer cannot execute tools or confirm operations.
-- Invalid review output receives precise deterministic feedback and one repair attempt. When a
-  clarification cites optional input or an undeclared precondition, the repair request exposes only
-  the correction branch, preventing the reviewer from repeating or relabelling the invalid outcome.
-- Failure to obtain a valid review fails the turn with retryable `LLM_REVIEW_FAILED`; it is never
-  persisted as a successful customer clarification.
+Planning may propose public tool arguments, a declared-blocker clarification, a semantic-intent
+clarification, or a trusted interaction proposal. Single-intent metadata is derived by the
+application; multi-intent tools require an explicit compatible intent. Planning cannot execute
+tools, supply protected fields, confirm a mutation, or emit a URL.
+The planner receives generic clarification only after `affordances.py` has proved that the current
+typed turn has no safe progress operation for at least one resolved intent. The probe reuses policy
+and catalogue contracts and does not parse public language. When all resolved intents can progress,
+blocked sibling tools and generic clarification are removed before the provider request.
+Composition may reference only normalized result facts/cards/collections/links and must place one
+transactional question last when a turn also contains information answers. Policy never supplies
+the visible clarification wording; rejected proposals return to planning.

@@ -1,4 +1,4 @@
-"""Deterministic offline provider that emits the same concrete calls as hosted mode."""
+"""Deterministic test provider that emits provider-neutral concrete calls."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from webchat.integrations.fake_llm.routing import DeterministicApplicationRouter
 from webchat.integrations.fake_llm.routing.base import clarify
 from webchat.integrations.fake_llm.routing.context import ConversationContext
 from webchat.integrations.fake_llm.routing.parsers import location_query, workshop_filters
+from webchat.orchestration.tools.service_resolution import service_query_tokens
 
 
 def _tool(name: str, **arguments: Any) -> ProviderReply:
@@ -91,6 +92,14 @@ class DeterministicToolRules:
             {"where", "location", "locations", "address"}
         ):
             return _tool("list_workshop_locations")
+        if context.is_choosing_workshop_service():
+            arguments = {
+                key: value
+                for key, value in workshop_filters(context.latest).items()
+                if key in {"dateFrom", "dateTo", "dealershipTown"}
+            }
+            arguments["serviceTypeName"] = context.latest[:200]
+            return _tool("refine_workshop_slots", **arguments)
         if _named_service_support_request(context.latest):
             return _tool("get_service_information", q=context.latest[:200])
 
@@ -129,10 +138,14 @@ class DeterministicToolRules:
                 "workshop" in words
                 and words.intersection({"availability", "find", "times", "slots"})
             )
+            or (
+                has_named_service
+                and bool(re.search(r"\b(?:book|booking|appointment)\b", context.combined))
+            )
         )
         if service_context and booking_request:
             if not has_named_service:
-                return _tool("list_service_types")
+                return _tool("list_workshop_slots")
             arguments = {
                 key: value
                 for key, value in workshop_filters(context.latest).items()
@@ -228,7 +241,7 @@ class DeterministicToolRules:
 
 
 class DeterministicToolPlanner:
-    """Offline provider implementation with the hosted direct-tool boundary."""
+    """Test-only provider implementation using the shared direct-tool boundary."""
 
     def __init__(
         self,
@@ -239,7 +252,7 @@ class DeterministicToolPlanner:
         self.rules = rules or DeterministicToolRules()
 
     async def generate_turn(self, messages: list[dict[str, Any]]) -> ProviderReply:
-        pending = getattr(getattr(messages, "reviewer_context", None), "pending_interaction", None)
+        pending = getattr(getattr(messages, "planning_context", None), "pending_interaction", None)
         latest = next(
             (
                 str(message.get("content") or "")
@@ -284,7 +297,7 @@ def _active_service_arguments(context: ConversationContext) -> dict[str, Any]:
 
 def _has_named_service(context: ConversationContext) -> bool:
     return bool(
-        context.words.intersection(
+        service_query_tokens(context.latest).intersection(
             {
                 "mot",
                 "interim",
@@ -292,10 +305,10 @@ def _has_named_service(context: ConversationContext) -> bool:
                 "full",
                 "brake",
                 "tyre",
-                "tyres",
                 "diagnostic",
                 "oil",
                 "inspection",
+                "recall",
             }
         )
         or re.search(r"\bannual\s+service\b", context.latest, re.IGNORECASE)

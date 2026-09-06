@@ -96,6 +96,61 @@ FACT_SPECS: tuple[FactSpec, ...] = (
     ),
 )
 
+# Some public facts are qualifications of an entire topic, rather than optional answers to one
+# wording.  Once a question has genuinely matched that topic, the qualification must accompany a
+# more specific fact (for example, minimum age) so relevance ranking cannot silently remove a
+# customer-protection notice.
+_REQUIRED_TOPIC_FACTS: dict[BusinessTopic, tuple[str, ...]] = {
+    "finance": ("finance.notice",),
+    "part_exchange": ("part_exchange.estimate_notice",),
+}
+
+_QUERY_NOISE = frozenset(
+    {
+        "about",
+        "and",
+        "are",
+        "business",
+        "can",
+        "car",
+        "could",
+        "did",
+        "does",
+        "for",
+        "from",
+        "have",
+        "how",
+        "information",
+        "into",
+        "motor",
+        "motors",
+        "northstar",
+        "our",
+        "please",
+        "policy",
+        "question",
+        "that",
+        "the",
+        "their",
+        "there",
+        "they",
+        "this",
+        "vehicle",
+        "was",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+    }
+)
+
 
 class BusinessInformationResolver:
     """Return only platform facts relevant to the exact customer question."""
@@ -138,12 +193,35 @@ class BusinessInformationResolver:
         strongest_topics = {fact.topic for fact in strongest}
         if topic == "general" and len(strongest_topics) > 1:
             return BusinessInformationResolution("ambiguous", topic, strongest)
-        return BusinessInformationResolution("matched", topic, strongest)
+        strongest_keys = {fact.key for fact in strongest}
+        required_keys = tuple(
+            dict.fromkeys(
+                key
+                for matched_topic in strongest_topics
+                for key in _REQUIRED_TOPIC_FACTS.get(matched_topic, ())
+            )
+        )
+        specs_by_key = {spec.key: spec for spec in FACT_SPECS}
+        required = tuple(
+            BusinessFact(
+                specs_by_key[key].key,
+                specs_by_key[key].topic,
+                specs_by_key[key].label,
+                str(_path_value(data, specs_by_key[key].path)),
+            )
+            for key in required_keys
+            if key in specs_by_key
+            and _path_value(data, specs_by_key[key].path) not in (None, "")
+            and key not in strongest_keys
+        )
+        return BusinessInformationResolution("matched", topic, (*required, *strongest))
 
 
 def _tokens(value: str) -> frozenset[str]:
     return frozenset(
-        token for token in re.findall(r"[a-z0-9]+", value.casefold()) if len(token) >= 3
+        token
+        for token in re.findall(r"[a-z0-9]+", value.casefold())
+        if len(token) >= 3 and token not in _QUERY_NOISE
     )
 
 

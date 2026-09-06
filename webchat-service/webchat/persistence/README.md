@@ -1,34 +1,21 @@
 # Persistence package
 
-This package owns webchat SQLite schema evolution and repository access. SQL does not belong in API,
-orchestration, widget, or integration modules.
-
-## Files and folders
-
-| Path | Responsibility |
-| --- | --- |
-| `__init__.py` | Package marker |
-| [`database.py`](./database.py) | SQLite connections, foreign keys, busy timeout, WAL migrations, `BEGIN IMMEDIATE` transactions |
-| [`repositories/`](./repositories) | Stable repository facade with one module per persisted aggregate |
-| [`migrations/`](./migrations/README.md) | Ordered immutable SQL schema migrations |
-
-## Repository ownership
+SQLite is the durable webchat store. Migrations run on startup; SQL remains inside repositories.
+`database.py` owns connection setup, transaction scope, migration execution, and SQLite pragmas.
 
 | Repository | Owns |
 | --- | --- |
-| `ConversationRepository` | Session hashes, conversation lifecycle/listing, initial/current context, workflow state, expiry |
-| `MessageRepository` | Ordered messages, per-turn reads, draft-card replacement with receipt |
-| `TurnRepository` | Client-message deduplication and running/completed/failed state |
-| `WorkflowRepository` | Draft replacement/status, operation attempts, idempotency keys, receipts, verified grants |
+| `ConversationRepository` | sessions, lifecycle, page context, authoritative `state_json`, legacy workflow mirror |
+| `MessageRepository` | ordered messages, grounded segments/views, receipt replacement |
+| `TurnRepository` | client-message admission and execution status |
+| `TurnCommitRepository` | atomic final turns, trusted result envelopes, and protected prompt/interaction/state transitions |
+| `ProtectedInteractionRepository` | latest confirmation/navigation interaction, status, supersession |
+| `WorkflowRepository` | drafts, idempotent operation attempts, receipts, verified booking grants |
 
-Callers import repositories from `webchat.persistence.repositories`; the package facade keeps that
-boundary stable while SQL remains grouped by aggregate.
+`state_json.agentWorkflow` is the public workflow authority. Sibling state members own the latest
+result-set references, agenda, and protected pending interaction. `workflow_state_json` remains a
+compatibility mirror/fallback for existing databases. Unsubmitted protected browser answers never
+enter SQLite.
 
-## Rules
-
-- Use parameterized SQL for values.
-- Use repository transactions for state transitions that must be atomic.
-- Persist idempotency material before external creation calls.
-- Never expose raw repository rows directly to the browser.
-- Add a new migration instead of rewriting an applied migration.
-- Keep migration files included in `pyproject.toml` package data.
+Use parameterized SQL, repository transactions for atomic state changes, and new immutable
+migrations rather than editing an applied migration.

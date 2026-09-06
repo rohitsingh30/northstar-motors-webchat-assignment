@@ -47,6 +47,24 @@ Search inventory:
 curl "http://localhost:4010/api/vehicles?bodyStyle=SUV&fuelType=Hybrid&maxPricePence=4500000"
 ```
 
+The current worktree also accepts repeated multi-value inclusion filters (`makes`, `models`,
+`colours`, `fuelTypes`, `transmissions`, and `bodyStyles`), the corresponding exclusion filters,
+`colour`, `minMileage`, `maxYear`, and `mileageDesc`. For example:
+
+```bash
+curl --get "http://localhost:4010/api/vehicles" \
+  --data-urlencode "makes=BMW" \
+  --data-urlencode "makes=Volvo" \
+  --data-urlencode "excludedBodyStyles=Saloon" \
+  --data-urlencode "minMileage=20000" \
+  --data-urlencode "maxYear=2024" \
+  --data-urlencode "sort=mileageDesc"
+```
+
+These are additive read-contract extensions used by the current webchat implementation. They do
+not alter the seed or write semantics, but they are a documented deviation from the product brief's
+unchanged-platform constraint.
+
 Check a vehicle's current business state:
 
 ```bash

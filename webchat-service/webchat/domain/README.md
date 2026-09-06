@@ -1,28 +1,32 @@
 # Domain package
 
-This package contains application-owned business semantics and the deterministic workflow safety
-boundary. It does not parse HTTP requests or render browser components.
-
-## Files
+Domain modules define application-owned invariants without HTTP, model transport, or rendering.
 
 | File | Responsibility |
 | --- | --- |
-| `__init__.py` | Package marker |
-| [`models.py`](./models.py) | Immutable persisted `Message` and `Turn` records |
-| [`interactions.py`](./interactions.py) | Validated, persisted contracts for pending assistant prompts and application-owned actions |
-| [`business_semantics.py`](./business_semantics.py) | Exact GBP and vehicle-availability wording |
-| [`workflows.py`](./workflows.py) | Required fields, material hashing, draft preparation, confirmation execution, public receipts, verified booking lookup/mutation |
+| `capabilities.py` | one registry for public fields, protected fields, optionality, dependency-safe public question groups, live-field resolvers, continuation tools, and agent tool per workflow |
+| `conversation_state.py` | versioned workflow/dialogue state, open-question contracts, and validated event reducer |
+| `protected_interactions.py` | latest-only protected confirmation/navigation contracts |
+| `turn_actions.py` | closed typed client-action contract |
+| `approved_content.py` | approved application copy/fact identifiers |
+| `field_guidance.py` | shared labels, prompts, examples, and closed choices for collected input |
+| `vehicle_safety.py` | narrow first-response guidance for unambiguous active vehicle hazards |
+| `interactions.py` | pending assistant interaction models |
+| `models.py` | immutable message/turn records |
+| `business_semantics.py` | exact money and availability semantics |
+| `workflows.py` | draft completeness, redaction, idempotent confirmed writes, receipts, verification grants |
 
-## Workflow invariants
+Provider-facing workflow schemas may contain only registry `public_fields`. Protected values enter
+only dedicated endpoints. A draft must be complete and persisted before confirmation; confirmation
+executes stored data, never browser/model overrides. Booking amendment/cancellation requires a live
+verified grant, and vehicle-sensitive writes recheck availability where required.
 
-- Unsupported workflow kinds fail closed.
-- Empty values do not satisfy required fields.
-- Contact details are not echoed in confirmation summaries.
-- A complete draft is persisted before confirmation can be offered.
-- Confirmation executes stored fields, not browser/model overrides.
-- Creation operations use the persisted idempotency key.
-- Reserved-vehicle interest rechecks live availability.
-- Workshop amend/cancel obtains the platform record ID only from a valid verified grant.
+When a required public value must be selected from changing business data, the capability declares
+its live-field resolver. The policy compiler then makes that read part of the workflow transition;
+the model cannot leave the customer at an internal draft placeholder or invent the missing value.
+Customer wording is resolved before policy. Domain code validates the resulting IDs, question
+relationship, and source provenance; it contains no phrase or ordinal intent router.
 
-When adding a workflow kind, update required fields, preparation-tool mapping, execution dispatch,
-receipt text/rendering, tests, and HLD/LLD together.
+The sole raw-language domain exception is immediate harm-reduction guidance for a closed set of
+unambiguous active vehicle hazards. It cannot select a business capability, diagnose a fault, or
+mutate trusted state.

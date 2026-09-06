@@ -1,6 +1,8 @@
 from pathlib import Path
 
+from webchat.api.restoration import message_view
 from webchat.domain.interactions import single_action_interaction
+from webchat.domain.models import Message
 from webchat.persistence.database import Database
 from webchat.persistence.repositories import ConversationRepository, MessageRepository
 
@@ -42,3 +44,19 @@ def test_conversation_stores_hash_and_orders_messages(tmp_path: Path) -> None:
     assert [message.text for message in messages.list(conversation["id"])] == ["one", "two"]
     assert messages.list(conversation["id"])[1].interaction_json == interaction.as_json()
     assert token.encode() not in database.path.read_bytes()
+
+
+def test_public_message_preserves_turn_identity_for_layout_grouping() -> None:
+    stored = Message(
+        id="message-availability",
+        conversation_id="conversation-layout",
+        turn_id="turn-availability",
+        sequence=2,
+        role="assistant",
+        text="You can still register your interest.",
+        view_type=None,
+        view_payload_json=None,
+        created_at="2026-09-05T12:00:00Z",
+    )
+
+    assert message_view(stored)["turnId"] == "turn-availability"

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createChatApi } from "../../webchat/widget/core/api.js";
 import {
   bookingRecoveryKind,
+  requestFailureKey,
   retryTurnState,
+  turnFailureRecovery,
 } from "../../webchat/widget/core/recovery.js";
 
 test("booking recovery distinguishes fresh slots, unavailable vehicles, and fields", () => {
@@ -41,4 +44,44 @@ test("turn retry keeps text and reuses only an indeterminate request id", () => 
     clientMessageId: null,
     appendUser: true,
   });
+});
+
+test("invalid grounded output asks for rephrasing instead of repeating a permanent failure", () => {
+  assert.equal(turnFailureRecovery({ retryable: false }), "rephrase");
+  assert.equal(turnFailureRecovery({ retryable: true }), "retry");
+  assert.equal(turnFailureRecovery(new Error("network")), "retry");
+});
+
+test("request failures have a stable key so concurrent errors render once", () => {
+  assert.equal(
+    requestFailureKey({ code: "RATE_LIMITED", message: "Please wait one minute." }),
+    "RATE_LIMITED:Please wait one minute.",
+  );
+  assert.equal(
+    requestFailureKey(new Error("network")),
+    "CHAT_REQUEST_FAILED:network",
+  );
+});
+
+test("the chat API aborts every pending request at the new-conversation boundary", async () => {
+  const originalFetch = globalThis.fetch;
+  let aborted = false;
+  globalThis.fetch = (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      aborted = true;
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      reject(error);
+    }, { once: true });
+  });
+
+  try {
+    const api = createChatApi("/api/chat/v1");
+    const pending = api.sendTurn("conversation-1", "message-1", "Hello", {});
+    api.cancelPendingRequests();
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal(aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

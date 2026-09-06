@@ -1,41 +1,27 @@
 # `webchat` runtime package
 
-This is the complete deployable service: API, workflows, external adapters, semantic orchestration,
-persistence, observability, and the hosted widget.
+`webchat` is the deployable conversational service and hosted widget.
 
-## Direct files
-
-| File | Responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `__init__.py` | Installable-package marker |
-| `main.py` | Composition root, lifespan resources, middleware, routes, widget mount, health endpoints |
-| `config.py` | Typed environment settings, complete hosted-provider validation, MCP configuration parsing |
-
-## Subpackages
-
-| Folder | Responsibility |
-| --- | --- |
-| `api/` | Browser schemas, routes, authorization, error mapping, restoration |
-| `domain/` | Write-draft validation, confirmation, and public receipts |
-| `integrations/` | Dealership, hosted LLM, and offline-provider adapters |
-| `orchestration/` | Context, retrieval, review, policy, catalogue, tools, state, and presentation |
+| `main.py` | composition root, migration startup, adapters, repositories, routes, static widget |
+| `config.py` | strict settings and hosted-provider/MCP validation |
+| `api/` | browser boundary and protected endpoints |
+| `domain/` | capability, conversation-state, workflow, and protected-action contracts |
+| `integrations/` | dealership, hosted AI, and test-provider adapters |
+| `orchestration/` | plan/policy/tool/fact/compose/ground turn lifecycle |
 | `persistence/` | SQLite migrations and repositories |
-| `observability/` | Structured logging and redaction |
-| `widget/` | Web component, transport, cards, forms, styles, and accessibility |
+| `observability/` | structured logging and redaction |
+| `widget/` | web component, transcript/views, lifecycle, and protected capture |
 
-## Startup flow
+Startup is:
 
 ```text
-Settings → logging → SQLite/repositories → dealership/workflow services
-         → unified tool catalogue + optional MCP discovery
-         → hosted semantic retriever/provider OR offline provider
-         → Orchestrator → FastAPI routes
+settings validation -> database migrations/repositories -> dealership/workflow services
+ -> unified local/read-only-MCP catalogue -> hosted resolver/planner/composer + retrieval
+ -> orchestrator -> API + static widget
 ```
 
-Concrete infrastructure is wired only in `main.py`. Feature modules consume focused contracts.
-Production requires one complete provider URL/key/model configuration; development and tests may
-use the isolated deterministic provider.
-
-Within a layer, a concern remains a module until it genuinely needs several cohesive files. Public
-facades keep imports stable for multi-file subsystems such as hosted LLM integration, repositories,
-and widget renderers.
+Development and production require a complete hosted provider URL/key/model configuration. Only an
+explicit test environment may construct `FakeLlmProvider`. Concrete infrastructure is wired in
+`main.py`; feature modules depend on focused contracts.

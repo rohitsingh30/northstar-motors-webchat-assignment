@@ -43,6 +43,9 @@ class MessageRepository:
         view_type: str | None = None,
         view_payload_json: str | None = None,
         interaction_json: str | None = None,
+        purpose: str | None = None,
+        segments_json: str | None = None,
+        blocks_json: str | None = None,
     ) -> Message:
         message_id = str(uuid.uuid4())
         created_at = utc_now()
@@ -54,8 +57,8 @@ class MessageRepository:
             connection.execute(
                 "INSERT INTO messages "
                 "(id, conversation_id, turn_id, sequence, role, text, view_type, "
-                "view_payload_json, created_at, interaction_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "view_payload_json, created_at, interaction_json, purpose, segments_json, "
+                "blocks_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     message_id,
                     conversation_id,
@@ -67,6 +70,9 @@ class MessageRepository:
                     view_payload_json,
                     created_at,
                     interaction_json,
+                    purpose,
+                    segments_json,
+                    blocks_json,
                 ),
             )
         return Message(
@@ -80,6 +86,9 @@ class MessageRepository:
             view_payload_json,
             created_at,
             interaction_json,
+            purpose,
+            segments_json,
+            blocks_json,
         )
 
     def replace_draft_with_receipt(
@@ -89,7 +98,7 @@ class MessageRepository:
         text: str,
         receipt: dict,
     ) -> bool:
-        """Replace the persisted draft card so restored chats cannot revive completed forms."""
+        """Replace a protected review so restored chats cannot revive completed confirmation."""
         with self.database.transaction() as connection:
             rows = connection.execute(
                 "SELECT id, view_payload_json FROM messages "
@@ -113,6 +122,43 @@ class MessageRepository:
                     "UPDATE messages SET text = ?, view_type = 'receipt', view_payload_json = ? "
                     "WHERE id = ?",
                     (text, json.dumps(receipt, separators=(",", ":")), fallback_row["id"]),
+                )
+                return True
+        return False
+
+    def supersede_confirmation(
+        self,
+        conversation_id: str,
+        draft_id: str,
+        kind: str,
+    ) -> bool:
+        payload = json.dumps(
+            {
+                "version": 1,
+                "draftId": draft_id,
+                "kind": kind,
+                "status": "superseded",
+            },
+            separators=(",", ":"),
+        )
+        with self.database.transaction() as connection:
+            rows = connection.execute(
+                "SELECT id, view_payload_json FROM messages "
+                "WHERE conversation_id = ? AND view_type = 'confirmation' "
+                "ORDER BY sequence DESC",
+                (conversation_id,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    current = json.loads(row["view_payload_json"] or "{}")
+                except (TypeError, ValueError):
+                    continue
+                if current.get("draftId") != draft_id:
+                    continue
+                connection.execute(
+                    "UPDATE messages SET text = ?, view_type = 'superseded_confirmation', "
+                    "view_payload_json = ?, interaction_json = NULL WHERE id = ?",
+                    ("Superseded — details changed.", payload, row["id"]),
                 )
                 return True
         return False

@@ -76,8 +76,8 @@ class Settings(BaseSettings):
     @field_validator("webchat_requests_per_minute")
     @classmethod
     def bounded_request_limit(cls, value: int) -> int:
-        if not 1 <= value <= 600:
-            raise ValueError("must be between 1 and 600")
+        if not 0 <= value <= 600:
+            raise ValueError("must be zero (disabled) or between 1 and 600")
         return value
 
     @field_validator("webchat_daily_turn_limit")
@@ -111,7 +111,7 @@ class Settings(BaseSettings):
         missing = [name for name, value in configuration if value is None]
         if configured and missing:
             raise ValueError(f"Hosted LLM configuration is incomplete: {', '.join(missing)}")
-        if self.environment == "production" and missing:
+        if self.environment != "test" and missing:
             raise ValueError(f"Hosted LLM configuration is required: {', '.join(missing)}")
 
     @property

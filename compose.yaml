@@ -28,6 +28,7 @@ services:
     build:
       context: ./webchat-service
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       LLM_PROVIDER_URL: ${LLM_PROVIDER_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
@@ -39,7 +40,9 @@ services:
       WEBCHAT_COOKIE_SECURE: ${WEBCHAT_COOKIE_SECURE:-false}
       WEBCHAT_ALLOWED_ORIGIN: ${WEBCHAT_ALLOWED_ORIGIN:-http://localhost:4173}
       WEBCHAT_RETENTION_DAYS: ${WEBCHAT_RETENTION_DAYS:-30}
-      WEBCHAT_REQUESTS_PER_MINUTE: ${WEBCHAT_REQUESTS_PER_MINUTE:-60}
+      # Docker Desktop presents every local browser and test context as one client address.
+      # Public deployments retain their finite application and gateway limits.
+      WEBCHAT_REQUESTS_PER_MINUTE: ${WEBCHAT_REQUESTS_PER_MINUTE:-0}
       WEBCHAT_DAILY_TURN_LIMIT: ${WEBCHAT_DAILY_TURN_LIMIT:-0}
       WEBCHAT_MAX_CONCURRENT_TURNS: ${WEBCHAT_MAX_CONCURRENT_TURNS:-8}
       WEBCHAT_TRUST_PROXY_HEADERS: ${WEBCHAT_TRUST_PROXY_HEADERS:-false}

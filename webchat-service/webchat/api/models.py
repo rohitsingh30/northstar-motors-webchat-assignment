@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from webchat.domain.turn_actions import TurnAction
 
 
 class StrictModel(BaseModel):
@@ -67,99 +69,6 @@ class PageContext(StrictModel):
 
 class CreateConversationRequest(StrictModel):
     pageContext: PageContext
-
-
-class TurnAction(StrictModel):
-    type: Literal[
-        "select_test_drive_vehicle",
-        "next_vehicle_page",
-        "search_vehicle_inventory",
-        "compare_displayed_vehicles",
-        "select_workshop_service",
-        "start_dealership_workshop",
-        "try_workshop_location",
-        "show_workshop_services",
-        "start_vehicle_interest",
-        "start_sales_enquiry",
-        "start_offer_enquiry",
-        "view_offer",
-        "apply_vehicle_preference",
-        "choose_vehicle_filter",
-        "clear_vehicle_filter",
-        "reset_vehicle_search",
-        "start_callback",
-        "start_dealership_message",
-        "show_dealerships",
-        "show_opening_hours",
-        "show_dealership_contact_options",
-    ]
-    vehicleId: str | None = Field(default=None, pattern=r"^veh-[0-9]{3}$")
-    serviceTypeId: str | None = Field(default=None, min_length=1, max_length=80)
-    dealershipId: str | None = Field(default=None, min_length=1, max_length=80)
-    offerId: str | None = Field(default=None, min_length=1, max_length=80)
-    vehicleFilter: (
-        Literal[
-            "make",
-            "model",
-            "fuelType",
-            "transmission",
-            "bodyStyle",
-            "maxPricePence",
-            "maxMileage",
-        ]
-        | None
-    ) = None
-    vehicleFilterValue: str | int | None = None
-
-    @model_validator(mode="after")
-    def matching_identifier(self):
-        identifiers = {
-            "vehicleId": self.vehicleId,
-            "serviceTypeId": self.serviceTypeId,
-            "dealershipId": self.dealershipId,
-        }
-        required = {
-            "select_test_drive_vehicle": {"vehicleId"},
-            "start_vehicle_interest": {"vehicleId"},
-            "start_sales_enquiry": {"vehicleId"},
-            "start_offer_enquiry": {"offerId"},
-            "view_offer": {"offerId"},
-            "select_workshop_service": {"serviceTypeId"},
-            "start_dealership_workshop": {"dealershipId"},
-            "try_workshop_location": {"serviceTypeId", "dealershipId"},
-            "next_vehicle_page": set(),
-            "search_vehicle_inventory": set(),
-            "compare_displayed_vehicles": set(),
-            "show_workshop_services": set(),
-            "apply_vehicle_preference": {"vehicleFilter", "vehicleFilterValue"},
-            "choose_vehicle_filter": {"vehicleFilter"},
-            "clear_vehicle_filter": {"vehicleFilter"},
-            "reset_vehicle_search": set(),
-            "start_callback": set(),
-            "start_dealership_message": set(),
-            "show_dealerships": set(),
-            "show_opening_hours": set(),
-            "show_dealership_contact_options": set(),
-        }[self.type]
-        identifiers.update(
-            offerId=self.offerId,
-            vehicleFilter=self.vehicleFilter,
-            vehicleFilterValue=self.vehicleFilterValue,
-        )
-        provided = {key for key, value in identifiers.items() if value is not None}
-        if provided != required:
-            labels = ", ".join(sorted(required)) or "no identifiers"
-            raise ValueError(f"{self.type} requires {labels}")
-        if self.type == "apply_vehicle_preference":
-            numeric = self.vehicleFilter in {"maxPricePence", "maxMileage"}
-            if numeric and (
-                isinstance(self.vehicleFilterValue, bool)
-                or not isinstance(self.vehicleFilterValue, int)
-            ):
-                raise ValueError(f"{self.vehicleFilter} requires an integer value")
-            if not numeric and not str(self.vehicleFilterValue or "").strip():
-                raise ValueError(f"{self.vehicleFilter} requires a text value")
-        return self
 
 
 class SendTurnRequest(StrictModel):
@@ -317,3 +226,144 @@ class BookingLookupRequest(StrictModel):
 class WorkshopExistingActionRequest(StrictModel):
     mode: Literal["amend", "cancel"]
     bookingReference: str | None = Field(default=None, min_length=3, max_length=80)
+
+
+AssistantMode = Literal["hosted", "limited_demo"]
+
+
+class PublicTextSegment(StrictModel):
+    type: Literal["text"]
+    text: str = Field(min_length=1, max_length=8_000)
+
+
+class PublicEmphasisSegment(StrictModel):
+    type: Literal["emphasis"]
+    text: str = Field(min_length=1, max_length=160)
+
+
+class PublicFactSegment(StrictModel):
+    type: Literal["fact"]
+    factId: str = Field(pattern=r"^fact-[A-Za-z0-9_.:-]{1,160}$")
+    text: str = Field(min_length=1, max_length=8_000)
+
+
+class PublicLinkSegment(StrictModel):
+    type: Literal["link"]
+    label: str = Field(min_length=1, max_length=160)
+    href: str = Field(min_length=1, max_length=1_000)
+    destinationKind: Literal["telephone", "email", "directions", "website"]
+
+
+class PublicBulletSegment(StrictModel):
+    type: Literal["bullet"]
+
+
+PublicInlineSegment = (
+    PublicTextSegment | PublicEmphasisSegment | PublicFactSegment | PublicLinkSegment
+)
+
+
+class PublicParagraphBlock(StrictModel):
+    type: Literal["paragraph"]
+    segments: list[PublicInlineSegment] = Field(min_length=1, max_length=40)
+
+
+class PublicListItem(StrictModel):
+    segments: list[PublicInlineSegment] = Field(min_length=1, max_length=40)
+
+
+class PublicListBlock(StrictModel):
+    type: Literal["list"]
+    items: list[PublicListItem] = Field(min_length=1, max_length=12)
+
+
+class PublicMessage(StrictModel):
+    id: str
+    turnId: str | None = None
+    role: Literal["user", "assistant"]
+    text: str = Field(max_length=8_000)
+    createdAt: str
+    purpose: str | None = None
+    viewType: str | None = None
+    view: dict[str, Any] | None = None
+    segments: (
+        list[
+            PublicTextSegment
+            | PublicEmphasisSegment
+            | PublicFactSegment
+            | PublicLinkSegment
+            | PublicBulletSegment
+        ]
+        | None
+    ) = Field(default=None, max_length=40)
+    blocks: list[PublicParagraphBlock | PublicListBlock] | None = Field(
+        default=None,
+        max_length=12,
+    )
+
+
+class CreateConversationResponse(StrictModel):
+    conversationId: UUID
+    createdAt: str
+    assistantMode: AssistantMode
+    messages: list[PublicMessage]
+
+
+class RestoreConversationResponse(StrictModel):
+    conversationId: UUID
+    assistantMode: AssistantMode
+    messages: list[PublicMessage]
+
+
+class WorkflowActivationResponse(StrictModel):
+    kind: str = Field(pattern=r"^[a-z][a-z0-9_]{1,79}$")
+    status: Literal["collecting"]
+    activation: dict[str, Any]
+
+
+class PendingInteractionResponse(StrictModel):
+    interactionId: str
+    kind: str
+    trustedEntity: dict[str, Any] | None = None
+    originatingMessageId: str
+    createdAtStateVersion: int = Field(ge=0)
+    status: str
+    activeDraftId: str | None = None
+    workflowKind: str | None = None
+    supersededByInteractionId: str | None = None
+    supersededAtTurnId: str | None = None
+
+
+class OpenVehicleDetailAction(StrictModel):
+    actionId: str
+    type: Literal["open_vehicle_detail"]
+    interactionId: str
+    vehicleId: str = Field(pattern=r"^veh-[0-9]{3}$")
+    sameSiteUrl: str = Field(pattern=r"^/\?vehicle=veh-[0-9]{3}$")
+
+    @model_validator(mode="after")
+    def target_matches_vehicle(self):
+        if self.sameSiteUrl != f"/?vehicle={self.vehicleId}":
+            raise ValueError("client action URL must match its trusted vehicle")
+        return self
+
+
+class TurnErrorResponse(StrictModel):
+    code: str
+    message: str
+    retryable: bool
+
+
+class SendTurnResponse(StrictModel):
+    schemaVersion: Literal[1]
+    turnId: UUID
+    status: Literal["completed", "failed", "processing"]
+    stateVersion: int = Field(ge=0)
+    assistantMode: AssistantMode
+    messages: list[PublicMessage]
+    cards: list[dict[str, Any]]
+    quickReplies: list[dict[str, Any]]
+    workflow: WorkflowActivationResponse | None
+    pendingInteraction: PendingInteractionResponse | None
+    clientActions: list[OpenVehicleDetailAction]
+    error: TurnErrorResponse | None

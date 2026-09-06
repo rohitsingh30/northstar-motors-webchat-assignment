@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -37,6 +38,13 @@ def vehicle_search_suggestions(
                 {"type": "compare_displayed_vehicles"},
             )
         )
+    if item_count and query.get("availability") in {None, "available"}:
+        suggestions.append(
+            chip(
+                "Book a test drive",
+                "book a test drive for one of these vehicles",
+            )
+        )
     suggestions.extend(vehicle_filter_controls(query) or vehicle_discovery_controls())
     if query.get("sort") != "priceAsc":
         suggestions.append(chip("Cheapest first", "show me the cheapest matching vehicles first"))
@@ -54,6 +62,13 @@ def current_page_vehicle_suggestions(item_count: int) -> list[dict[str, Any]]:
                 "Compare these vehicles",
                 "compare the vehicles currently shown",
                 {"type": "compare_displayed_vehicles"},
+            )
+        )
+    if item_count:
+        suggestions.append(
+            chip(
+                "Book a test drive",
+                "book a test drive for one of these vehicles",
             )
         )
     suggestions.append(
@@ -147,6 +162,7 @@ def vehicle_filter_summary(query: dict[str, Any]) -> str:
         ("q", "Search"),
         ("make", "Make"),
         ("model", "Model"),
+        ("colour", "Colour"),
         ("fuelType", "Fuel"),
         ("transmission", "Gearbox"),
         ("bodyStyle", "Body style"),
@@ -155,11 +171,25 @@ def vehicle_filter_summary(query: dict[str, Any]) -> str:
     for field, label in text_filters:
         if value := query.get(field):
             parts.append(f"{label}: {value}")
+    inclusion_filters = (
+        ("makes", "Makes"),
+        ("models", "Models"),
+        ("colours", "Colours"),
+        ("fuelTypes", "Fuels"),
+        ("transmissions", "Gearboxes"),
+        ("bodyStyles", "Body styles"),
+    )
+    for field, label in inclusion_filters:
+        values = query.get(field)
+        if values:
+            parts.append(f"{label}: {', '.join(str(value) for value in values)}")
     numeric_filters = (
         ("minPricePence", "Minimum price", lambda value: f"£{int(value) / 100:,.0f}"),
         ("maxPricePence", "Maximum price", lambda value: f"£{int(value) / 100:,.0f}"),
+        ("minMileage", "Minimum mileage", lambda value: f"{int(value):,} miles"),
         ("maxMileage", "Maximum mileage", lambda value: f"{int(value):,} miles"),
         ("minYear", "From year", lambda value: str(value)),
+        ("maxYear", "Up to year", lambda value: str(value)),
     )
     for field, label, formatter in numeric_filters:
         if query.get(field) is not None:
@@ -187,13 +217,57 @@ def vehicle_filter_summary(query: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def vehicle_comparison_suggestions() -> list[dict[str, str]]:
+def vehicle_comparison_suggestions(
+    vehicles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose safe vehicle-bound actions for the AI to select after a comparison.
+
+    Generic conversational next steps belong to the response composer as quick replies. The
+    application only supplies these candidates because a test-drive click must carry a trusted
+    vehicle ID.
+    """
+
+    suggestions: list[dict[str, Any]] = []
+    for vehicle in vehicles[:4]:
+        vehicle_id = str(vehicle.get("id") or "")
+        if not re.fullmatch(r"veh-[0-9]{3}", vehicle_id):
+            continue
+        identity = " ".join(
+            part
+            for part in (
+                str(vehicle.get("make") or "").strip(),
+                str(vehicle.get("model") or "").strip(),
+            )
+            if part
+        )
+        if not identity:
+            continue
+        suggestions.append(
+            chip(
+                f"Book {identity}",
+                f"Book a test drive for the {identity}",
+                {"type": "select_test_drive_vehicle", "vehicleId": vehicle_id},
+            )
+        )
+    # A comparison question is a complete set, not an optional shortcut menu. Three compared
+    # vehicles therefore need a fourth honest exit rather than dropping one vehicle to satisfy
+    # the global two-or-four chip layout contract.
+    if len(suggestions) == 3:
+        suggestions.append(chip("Find another car", "help me find another car"))
+    return suggestions
+
+
+def vehicle_resolution_suggestions(vehicles: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Expose only materially distinct trusted candidates for a comparison slot."""
+
     return [
-        chip("Show cheapest cars", "show me the cheapest available cars"),
-        chip("Find another car", "help me find another car"),
-        chip("Current offers", "show me current offers"),
-        chip("Part-exchange estimate", "I want an indicative part-exchange estimate"),
-    ][:4]
+        chip(
+            f"{vehicle.get('make', '')} {vehicle.get('model', '')}".strip(),
+            f"Use the {vehicle.get('make', '')} {vehicle.get('model', '')} for the comparison".strip(),
+        )
+        for vehicle in vehicles[:4]
+        if vehicle.get("make") and vehicle.get("model")
+    ]
 
 
 def vehicle_availability_suggestions(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -226,23 +300,75 @@ def vehicle_availability_suggestions(data: dict[str, Any]) -> list[dict[str, Any
                 {"type": "start_sales_enquiry", "vehicleId": vehicle_id},
             )
         )
-    suggestions.extend(
-        [
-            chip("Find another car", "help me find another car"),
-            chip("Part-exchange estimate", "I want an indicative part-exchange estimate"),
-        ]
-    )
+    suggestions.append(chip("Find another car", "help me find another car"))
     if len(suggestions) == 3:
         suggestions.append(chip("Current offers", "show me current offers"))
     return suggestions[:4]
 
 
-def dealership_suggestions() -> list[dict[str, str]]:
+def test_drive_no_availability_suggestions(vehicle_id: str) -> list[dict[str, Any]]:
+    """Offer exits from a no-slot outcome without restarting the same failed action."""
+
     return [
-        chip("Opening hours", "show me the opening hours"),
+        chip(
+            "Find another car",
+            "help me choose another car for the test drive",
+            {"type": "reset_vehicle_search"},
+        ),
+        chip(
+            "Send a sales enquiry",
+            "Send a sales enquiry about this vehicle",
+            {"type": "start_sales_enquiry", "vehicleId": vehicle_id},
+        ),
+    ]
+
+
+def workshop_booking_status_suggestions(status: str | None) -> list[dict[str, Any]]:
+    """Offer only next steps that are valid for the booking's trusted status."""
+
+    normalized = str(status or "").strip().casefold()
+    if normalized == "confirmed":
+        return [
+            chip("Edit booking", "edit this workshop booking"),
+            chip("Cancel booking", "cancel this workshop booking"),
+        ]
+    if normalized in {"cancelled", "canceled"}:
+        return [
+            chip("Book an appointment", "book a new workshop appointment"),
+            chip("Find another booking", "find another existing workshop booking"),
+        ]
+    return []
+
+
+def workshop_booking_status_prompt(status: str | None) -> str | None:
+    """Return the explicit question owned by the status-specific reply set."""
+
+    normalized = str(status or "").strip().casefold()
+    if normalized == "confirmed":
+        return "Would you like to edit or cancel this booking?"
+    if normalized in {"cancelled", "canceled"}:
+        return "Would you like to book another appointment or find another booking?"
+    return None
+
+
+def dealership_suggestions() -> list[dict[str, Any]]:
+    return [
+        chip(
+            "Opening hours",
+            "show me the opening hours",
+            {"type": "show_opening_hours"},
+        ),
         chip("Departments", "what departments do the dealerships have?"),
-        chip("Request a callback", "please have the dealership call me"),
-        chip("Leave a message", "send a message to the dealership"),
+        chip(
+            "Request a callback",
+            "please have the dealership call me",
+            {"type": "start_callback"},
+        ),
+        chip(
+            "Leave a message",
+            "send a message to the dealership",
+            {"type": "start_dealership_message"},
+        ),
     ][:4]
 
 
@@ -272,21 +398,37 @@ def dealership_contact_suggestions() -> list[dict[str, Any]]:
     ]
 
 
-def unknown_dealership_suggestions() -> list[dict[str, str]]:
+def unknown_dealership_suggestions() -> list[dict[str, Any]]:
     return [
         chip("Show all locations", "show me all dealership locations"),
         chip("Opening hours", "show me the opening hours"),
         chip("Departments", "what departments do the dealerships have?"),
-        chip("Request a callback", "please have a dealership call me"),
+        chip(
+            "Request a callback",
+            "please have a dealership call me",
+            {"type": "start_callback"},
+        ),
     ][:4]
 
 
-def opening_hours_suggestions() -> list[dict[str, str]]:
+def opening_hours_suggestions() -> list[dict[str, Any]]:
     return [
-        chip("Dealership details", "show me dealership contact details"),
-        chip("Request a callback", "please have the dealership call me"),
+        chip(
+            "Dealership details",
+            "show me dealership contact details",
+            {"type": "show_dealerships"},
+        ),
+        chip(
+            "Request a callback",
+            "please have the dealership call me",
+            {"type": "start_callback"},
+        ),
         chip("Departments", "what departments do the dealerships have?"),
-        chip("Leave a message", "send a message to the dealership"),
+        chip(
+            "Leave a message",
+            "send a message to the dealership",
+            {"type": "start_dealership_message"},
+        ),
     ][:4]
 
 
@@ -325,6 +467,29 @@ def workshop_location_suggestions() -> list[dict[str, str]]:
         chip("Service types", "what service types do you support?"),
         chip("Request a callback", "please have the service department call me"),
     ][:4]
+
+
+def workshop_booking_location_suggestions(
+    locations: list[dict[str, Any]], service_type_id: str
+) -> list[dict[str, Any]]:
+    """Grounded location selections for an active booking, outside visual cards."""
+    suggestions: list[dict[str, Any]] = []
+    for location in locations[:4]:
+        dealership_id = str(location.get("id") or "").strip()
+        label = str(location.get("town") or location.get("name") or "").strip()
+        if dealership_id and label:
+            suggestions.append(
+                chip(
+                    label,
+                    f"Use the workshop in {label}",
+                    {
+                        "type": "try_workshop_location",
+                        "serviceTypeId": service_type_id,
+                        "dealershipId": dealership_id,
+                    },
+                )
+            )
+    return suggestions
 
 
 def workshop_no_availability_suggestions(
@@ -372,24 +537,43 @@ def workshop_no_availability_suggestions(
 
 
 def offer_suggestions(offer: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not offer or not offer.get("id"):
+        return []
+    return [
+        chip(
+            "Enquire about this offer",
+            "I want to enquire about this offer",
+            {"type": "start_offer_enquiry", "offerId": str(offer["id"])},
+        )
+    ]
+
+
+def offer_selection_suggestions(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Provide the AI with offer-bound choices that answer an offer-selection question."""
+
     suggestions: list[dict[str, Any]] = []
-    if offer and offer.get("id"):
+    for offer in offers[:4]:
+        offer_id = str(offer.get("id") or "")
+        if not offer_id:
+            continue
+        identity = " ".join(
+            part
+            for part in (
+                str(offer.get("make") or "").strip(),
+                str(offer.get("model") or "").strip(),
+            )
+            if part
+        )
+        if not identity:
+            continue
         suggestions.append(
             chip(
-                "Enquire about this offer",
-                "I want to enquire about this offer",
-                {"type": "start_offer_enquiry", "offerId": str(offer["id"])},
+                identity,
+                f"Show me the {identity} offer",
+                {"type": "view_offer", "offerId": offer_id},
             )
         )
-    suggestions.extend(
-        [
-            chip("Show available cars", "show me available cars"),
-            chip("Part-exchange estimate", "I want an indicative part-exchange estimate"),
-            chip("Finance information", "how does vehicle finance work?"),
-            chip("Dealership locations", "show me all dealership locations"),
-        ]
-    )
-    return suggestions[:4]
+    return suggestions
 
 
 def vehicle_facet_suggestions(dimension: str, values: list[Any]) -> list[dict[str, str]]:

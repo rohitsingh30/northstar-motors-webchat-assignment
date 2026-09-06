@@ -23,7 +23,7 @@ def clarify(
     fields: tuple[str, ...] = (),
     preconditions: tuple[str, ...] = (),
 ) -> ProviderReply:
-    """Emit the same structured clarification contract as hosted review."""
+    """Emit the same structured clarification contract as hosted planning."""
     return ProviderReply(
         text,
         response_mode="clarify",

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
+from webchat.domain.interactions import ActionHandoff, choice_interaction
 from webchat.orchestration.presentation.suggestions import (
     dealership_contact_suggestions,
     dealership_suggestions,
@@ -15,10 +16,11 @@ from webchat.orchestration.tools.helpers import dealership_in_town, dealership_t
 from webchat.orchestration.tools.inputs import (
     DealershipQuery,
     DealershipScopeQuery,
+    HolidayOpeningHoursQuery,
     OpeningHoursQuery,
     StableId,
 )
-from webchat.orchestration.tools.result import ToolResult
+from webchat.orchestration.tools.result import ToolResult, alternative_offer
 
 
 class DealershipDirectoryGateway(Protocol):
@@ -68,13 +70,20 @@ class DealershipToolHandler:
         )
 
     async def _contact_options(self, arguments: dict[str, Any]) -> ToolResult:
-        del arguments
+        handoff_value = arguments.get("actionHandoff")
+        handoff = (
+            ActionHandoff.model_validate(handoff_value)
+            if isinstance(handoff_value, dict)
+            else None
+        )
         suggestions = dealership_contact_suggestions()
+        text = "Choose how you'd like to contact a Northstar dealership."
         return ToolResult(
-            "Choose how you'd like to contact a Northstar dealership.",
+            text,
             "suggestion_list",
             {"version": 1, "suggestions": suggestions},
             {"options": [suggestion["action"]["type"] for suggestion in suggestions]},
+            choice_interaction(text, suggestions, handoff=handoff),
         )
 
     async def _list_departments(self, arguments: dict[str, Any]) -> ToolResult:
@@ -162,16 +171,32 @@ class DealershipToolHandler:
         )
 
     async def _list_holiday_opening_hours(self, arguments: dict[str, Any]) -> ToolResult:
-        query = DealershipScopeQuery.model_validate(arguments)
+        query = HolidayOpeningHoursQuery.model_validate(arguments)
         dealership_items = await self._dealership_scope(query.dealershipId, query.town)
         if isinstance(dealership_items, ToolResult):
             return dealership_items
         items = []
         for dealership in dealership_items:
             hours = await self.dealership.get_opening_hours(str(dealership["id"]))
-            items.append(_opening_hours_item(dealership, hours, holiday_only=True))
+            items.append(
+                _opening_hours_item(
+                    dealership,
+                    hours,
+                    holiday_only=True,
+                    holiday_date=query.date,
+                    department=query.department,
+                )
+            )
+        missing_requested_hours = any(
+            item.get("holidayDepartment", {}).get("status") == "not_published"
+            for item in items
+        )
         return ToolResult(
-            "Published holiday opening hours are shown below.",
+            (
+                "The requested department's holiday hours are not published."
+                if missing_requested_hours
+                else "Published holiday opening hours are shown below."
+            ),
             "opening_hours",
             {
                 "version": 1,
@@ -180,7 +205,12 @@ class DealershipToolHandler:
                 "holidayOnly": True,
                 "suggestions": opening_hours_suggestions(),
             },
-            {"scheduleType": "holiday", "items": items},
+            {
+                "scheduleType": "holiday",
+                "requestedDate": query.date,
+                "requestedDepartment": query.department,
+                "items": items,
+            },
         )
 
     async def _dealership_scope(
@@ -205,6 +235,7 @@ def _opening_hours_item(
     day: str | None = None,
     department: str | None = None,
     holiday_only: bool = False,
+    holiday_date: str | None = None,
 ) -> dict[str, Any]:
     weekly = [
         entry
@@ -213,6 +244,26 @@ def _opening_hours_item(
         and (day is None or entry.get("day") == day)
         and (department is None or str(entry.get("department", "")).lower() == department)
     ]
+    holiday_exceptions = [
+        exception
+        for exception in hours.get("holidayExceptions", [])
+        if (department is None or str(exception.get("department", "")).lower() == department)
+        and (holiday_date is None or exception.get("date") == holiday_date)
+    ]
+    holiday_department = None
+    if holiday_only and department:
+        matched = holiday_exceptions[0] if holiday_exceptions else None
+        holiday_department = {
+            "name": department.title(),
+            "date": holiday_date,
+            "status": (
+                "closed"
+                if matched and matched.get("closed") is True
+                else "open"
+                if matched
+                else "not_published"
+            ),
+        }
     return {
         "name": dealership.get("name"),
         "town": dealership.get("town"),
@@ -228,11 +279,8 @@ def _opening_hours_item(
             }
             for entry in weekly
         ],
-        "holidayExceptions": [
-            exception
-            for exception in hours.get("holidayExceptions", [])
-            if department is None or str(exception.get("department", "")).lower() == department
-        ],
+        "holidayExceptions": holiday_exceptions,
+        **({"holidayDepartment": holiday_department} if holiday_department else {}),
     }
 
 
@@ -248,10 +296,25 @@ def _single_item_result(
 
 
 def _unknown_location(town: str, dealerships: list[dict]) -> ToolResult:
+    locations = dealership_towns(dealerships)
     return ToolResult(
         f"Northstar does not currently have a dealership in {town.title()}. "
-        f"Our locations are {dealership_towns(dealerships)}.",
+        f"Our locations are {locations}.",
         "suggestion_list",
         {"version": 1, "suggestions": unknown_dealership_suggestions()},
-        {"requestedTown": town, "items": []},
+        {"outcome": "unavailable", "requestedTown": town, "items": []},
+        alternative_offer=alternative_offer(
+            reason_code="requested_dealership_location_unavailable",
+            requested_outcome=f"A Northstar dealership in {town.title()}",
+            failure_reason=f"Northstar does not currently have a dealership in {town.title()}.",
+            offered_outcome=f"You can choose from the current Northstar locations: {locations}.",
+            changes=[
+                {
+                    "dimension": "Location",
+                    "requested": town.title(),
+                    "offered": locations,
+                }
+            ],
+            preserved=["Northstar dealership"],
+        ),
     )

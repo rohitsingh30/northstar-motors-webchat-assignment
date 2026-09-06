@@ -26,7 +26,12 @@ class TurnRepository:
             ).fetchone()
         return self._from_row(row) if row else None
 
-    def create(self, conversation_id: str, client_message_id: str) -> Turn:
+    def create(
+        self,
+        conversation_id: str,
+        client_message_id: str,
+        request_fingerprint: str,
+    ) -> Turn:
         turn = Turn(
             id=str(uuid.uuid4()),
             conversation_id=conversation_id,
@@ -36,12 +41,13 @@ class TurnRepository:
             error_category=None,
             started_at=utc_now(),
             completed_at=None,
+            request_fingerprint=request_fingerprint,
         )
         with self.database.transaction() as connection:
             connection.execute(
                 "INSERT INTO turns "
-                "(id, conversation_id, client_message_id, status, correlation_id, started_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(id, conversation_id, client_message_id, status, correlation_id, started_at, "
+                "request_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     turn.id,
                     turn.conversation_id,
@@ -49,9 +55,19 @@ class TurnRepository:
                     turn.status,
                     turn.correlation_id,
                     turn.started_at,
+                    turn.request_fingerprint,
                 ),
             )
         return turn
+
+    def restart(self, turn_id: str) -> None:
+        """Retry the identical failed request without creating a second user message."""
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE turns SET status = 'running', error_category = NULL, "
+                "completed_at = NULL, started_at = ? WHERE id = ? AND status = 'failed'",
+                (utc_now(), turn_id),
+            )
 
     def count_started_since(self, started_at: str) -> int:
         with self.database.connect() as connection:

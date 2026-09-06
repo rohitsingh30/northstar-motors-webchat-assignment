@@ -130,7 +130,7 @@ def _plain_text(lines: list[str]) -> str:
     kept: list[str] = []
     for line in lines:
         value = line.strip()
-        if not value or value.startswith("|") or value.startswith("<!--"):
+        if not value or value.startswith(("|", "<!--")):
             continue
         value = re.sub(r"^[-*]\s+", "", value)
         value = re.sub(r"\[([^]]+)]\([^)]+\)", r"\1", value)

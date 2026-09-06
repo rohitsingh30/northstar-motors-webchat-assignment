@@ -1,4 +1,4 @@
-"""Reviewer-facing limits for expensive AI-backed conversation turns."""
+"""Admission limits for expensive AI-backed conversation turns."""
 
 from __future__ import annotations
 

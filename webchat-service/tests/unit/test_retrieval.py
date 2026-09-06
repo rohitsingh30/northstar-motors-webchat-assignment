@@ -22,6 +22,7 @@ def retriever() -> FastEmbedCandidateRetriever:
         ("show me all available cars and clear my filters", "reset_vehicle_search"),
         ("help me find another car", "show_vehicle_preferences"),
         ("show me the cheapest matching vehicles first", "refine_vehicle_search"),
+        ("show me the vehicle", "get_vehicle"),
         ("Compare the BMW 1 Series and BMW 3 Series.", "compare_vehicle_models"),
         (
             (
@@ -74,6 +75,127 @@ def test_semantic_retrieval_keeps_required_tool_in_planner_candidates(
     candidates = retriever.retrieve(question)
 
     assert expected_tool in {tool.id for tool in candidates.tools}
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_tool", "broader_tools"),
+    [
+        (
+            "Leave a message for a dealership department",
+            "prepare_dealership_message",
+            {"show_dealership_contact_options", "prepare_callback", "prepare_sales_enquiry"},
+        ),
+        (
+            "Show me dealership contact details",
+            "list_dealerships",
+            {"show_dealership_contact_options", "get_dealership"},
+        ),
+        (
+            "How can I contact a dealership?",
+            "show_dealership_contact_options",
+            {"prepare_dealership_message", "prepare_callback", "list_dealerships"},
+        ),
+        (
+            "Find a hybrid SUV under forty thousand pounds",
+            "search_vehicles",
+            {"show_vehicle_preferences", "select_page_vehicles"},
+        ),
+        (
+            "Compare the BMW 1 Series with the Audi A3",
+            "compare_vehicle_models",
+            {"compare_vehicles"},
+        ),
+        (
+            "Show me current PCP offers",
+            "list_offers",
+            {"get_offer"},
+        ),
+        (
+            "How much is tyre fitting?",
+            "get_service_information",
+            {"list_service_types", "list_workshop_slots", "refine_workshop_slots"},
+        ),
+        (
+            "I need to change an existing unverified workshop booking",
+            "request_workshop_booking_lookup_form",
+            {"prepare_workshop_amendment", "list_workshop_slots", "refine_workshop_slots"},
+        ),
+        (
+            "I need to cancel an existing unverified workshop booking",
+            "request_workshop_booking_lookup_form",
+            {"prepare_workshop_cancellation", "cancel_active_capability"},
+        ),
+        (
+            "Value my car for part exchange",
+            "request_part_exchange_estimate_form",
+            {"prepare_part_exchange"},
+        ),
+        (
+            "Please ask the dealership to call me back",
+            "prepare_callback",
+            {"show_dealership_contact_options", "prepare_dealership_message"},
+        ),
+        (
+            "What time does the Stockport sales department open on Saturday?",
+            "list_opening_hours",
+            {"get_opening_hours", "show_dealership_contact_options"},
+        ),
+        (
+            "Arrange a test drive for me",
+            "prepare_test_drive",
+            {"list_test_drive_slots"},
+        ),
+        (
+            "What workshop services do you offer?",
+            "list_service_types",
+            {"get_service_information", "list_workshop_slots"},
+        ),
+        (
+            "Book an MOT",
+            "list_workshop_slots",
+            {"get_service_information", "list_service_types"},
+        ),
+        (
+            "I want to proceed with a part-exchange enquiry",
+            "prepare_part_exchange",
+            {"request_part_exchange_estimate_form"},
+        ),
+        (
+            "I want to make a sales enquiry about buying a vehicle",
+            "prepare_sales_enquiry",
+            {"prepare_dealership_message", "show_dealership_contact_options"},
+        ),
+        (
+            "Tell me more about this displayed offer",
+            "get_offer",
+            {"list_offers"},
+        ),
+        (
+            "Show the complete weekly schedule for this one displayed dealership",
+            "get_opening_hours",
+            {"list_opening_hours"},
+        ),
+        (
+            "Where are your workshop locations?",
+            "list_workshop_locations",
+            {"list_dealerships", "list_service_types"},
+        ),
+    ],
+)
+def test_semantic_retrieval_ranks_specific_intent_above_broader_siblings(
+    retriever: FastEmbedCandidateRetriever,
+    question: str,
+    expected_tool: str,
+    broader_tools: set[str],
+) -> None:
+    ranked = [tool.id for tool in retriever.retrieve(question).tools]
+
+    assert expected_tool in ranked
+    expected_rank = ranked.index(expected_tool)
+    assert all(
+        sibling not in ranked or expected_rank < ranked.index(sibling)
+        for sibling in broader_tools
+    )
 
 
 @pytest.mark.parametrize(

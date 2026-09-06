@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 import json
-import re
-import unicodedata
+import uuid
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from webchat.domain.turn_actions import TurnAction
+
+
+class ActionHandoff(BaseModel):
+    """Server-owned context carried across an application-authored action chain."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1] = 1
+    sourceWorkflow: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_]{1,79}$"
+    )
+    topic: Literal["finance", "privacy", "part_exchange", "general"] | None = None
+    customerReason: str | None = Field(default=None, min_length=1, max_length=4_000)
+    transition: Literal["handoff", "interrupt"] = "interrupt"
 
 
 class PendingInteraction(BaseModel):
@@ -16,21 +31,38 @@ class PendingInteraction(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: Literal[1] = 1
-    kind: Literal["single_action", "choice", "input", "protected_confirmation"]
+    kind: Literal[
+        "single_action",
+        "choice",
+        "input",
+        "protected_confirmation",
+        "reference_choice",
+        "intent_choice",
+    ]
     prompt: str = Field(min_length=1, max_length=800)
+    question_id: str | None = Field(
+        default=None, pattern=r"^question-[A-Za-z0-9_-]{1,64}$"
+    )
+    goal_intent: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_]{1,79}$"
+    )
+    candidate_references: list[str] = Field(default_factory=list, max_length=12)
+    candidate_intents: list[str] = Field(default_factory=list, max_length=4)
     actions: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
     blocking_tool: str | None = Field(default=None, min_length=1, max_length=100)
     blocking_fields: list[str] = Field(default_factory=list, max_length=8)
     blocking_preconditions: list[str] = Field(default_factory=list, max_length=8)
+    draft_id: str | None = Field(default=None, min_length=1, max_length=100)
+    workflow_kind: str | None = Field(default=None, min_length=1, max_length=80)
+    handoff: ActionHandoff | None = None
 
     @model_validator(mode="after")
     def valid_shape(self):
         for action in self.actions:
-            action_type = action.get("type")
-            if not isinstance(action_type, str) or not re.fullmatch(
-                r"[a-z][a-z0-9_]{0,79}", action_type
-            ):
-                raise ValueError("interaction actions require a safe action type")
+            try:
+                TurnAction.model_validate(action)
+            except ValueError as error:
+                raise ValueError("interaction actions require a safe action type") from error
         if self.kind == "single_action" and len(self.actions) != 1:
             raise ValueError("single-action interaction requires exactly one action")
         if self.kind == "choice" and not self.actions:
@@ -44,18 +76,75 @@ class PendingInteraction(BaseModel):
             raise ValueError("blocking metadata is reserved for input interactions")
         if self.kind in {"input", "protected_confirmation"} and self.actions:
             raise ValueError(f"{self.kind} interaction cannot execute a chat action")
+        if self.kind == "protected_confirmation":
+            if not self.draft_id or not self.workflow_kind:
+                raise ValueError("protected confirmations require draft metadata")
+        elif self.draft_id or self.workflow_kind:
+            raise ValueError("draft metadata is reserved for protected confirmations")
+        if self.handoff is not None and self.kind not in {"single_action", "choice"}:
+            raise ValueError("action handoff context is reserved for executable actions")
+        is_dialogue_choice = self.kind in {"reference_choice", "intent_choice"}
+        if is_dialogue_choice:
+            if not self.question_id:
+                raise ValueError("dialogue choices require a question ID")
+            if self.actions or self.blocking_tool or self.blocking_fields:
+                raise ValueError("dialogue choices cannot contain executable actions or blockers")
+            if self.kind == "reference_choice":
+                if len(self.candidate_references) < 2 or self.candidate_intents:
+                    raise ValueError("reference choices require candidate references only")
+                if not self.goal_intent:
+                    raise ValueError("reference choices require the owning goal intent")
+            elif len(self.candidate_intents) < 2 or self.candidate_references:
+                raise ValueError("intent choices require candidate intents only")
+        elif (
+            self.question_id
+            or self.goal_intent
+            or self.candidate_references
+            or self.candidate_intents
+        ):
+            raise ValueError("dialogue-choice metadata is reserved for dialogue choices")
         return self
 
     def as_json(self) -> str:
         return self.model_dump_json(exclude_none=True)
 
 
-def single_action_interaction(prompt: str, action: dict[str, Any]) -> PendingInteraction:
-    return PendingInteraction(kind="single_action", prompt=prompt, actions=[dict(action)])
+def composition_continuation(
+    interaction: PendingInteraction | None,
+) -> dict[str, Any] | None:
+    """Project only the public, typed next move needed by response composition."""
+
+    if interaction is None:
+        return None
+    return {
+        "kind": interaction.kind,
+        "prompt": interaction.prompt,
+        "goalIntent": interaction.goal_intent,
+        "candidateReferences": interaction.candidate_references,
+        "candidateIntents": interaction.candidate_intents,
+        "expectedFields": interaction.blocking_fields,
+    }
+
+
+def single_action_interaction(
+    prompt: str,
+    action: dict[str, Any],
+    *,
+    handoff: ActionHandoff | None = None,
+) -> PendingInteraction:
+    return PendingInteraction(
+        kind="single_action",
+        prompt=prompt,
+        actions=[dict(action)],
+        handoff=handoff,
+    )
 
 
 def choice_interaction(
-    prompt: str, suggestions: list[dict[str, Any]]
+    prompt: str,
+    suggestions: list[dict[str, Any]],
+    *,
+    handoff: ActionHandoff | None = None,
 ) -> PendingInteraction | None:
     """Describe a chooser only when every visible option has a typed action."""
     actions = [
@@ -66,8 +155,8 @@ def choice_interaction(
     if not suggestions or len(actions) != len(suggestions):
         return None
     if len(actions) == 1:
-        return single_action_interaction(prompt, actions[0])
-    return PendingInteraction(kind="choice", prompt=prompt, actions=actions)
+        return single_action_interaction(prompt, actions[0], handoff=handoff)
+    return PendingInteraction(kind="choice", prompt=prompt, actions=actions, handoff=handoff)
 
 
 def interaction_from_view(
@@ -77,7 +166,14 @@ def interaction_from_view(
 ) -> PendingInteraction | None:
     """Derive prompts only from closed chooser views, never arbitrary response prose."""
     if view_type == "confirmation":
-        return PendingInteraction(kind="protected_confirmation", prompt=prompt)
+        if not view_payload or not view_payload.get("draftId") or not view_payload.get("kind"):
+            return None
+        return PendingInteraction(
+            kind="protected_confirmation",
+            prompt=prompt,
+            draft_id=str(view_payload["draftId"]),
+            workflow_kind=str(view_payload["kind"]),
+        )
     if view_type not in {"service_list", "suggestion_list"} or not view_payload:
         return None
     suggestions = view_payload.get("suggestions")
@@ -98,6 +194,36 @@ def input_interaction(
         blocking_tool=blocking_tool,
         blocking_fields=blocking_fields,
         blocking_preconditions=blocking_preconditions,
+    )
+
+
+def reference_choice_interaction(
+    prompt: str,
+    candidate_references: tuple[str, ...],
+    goal_intent: str,
+) -> PendingInteraction:
+    """Persist an AI-authored entity question as model-visible dialogue state."""
+
+    return PendingInteraction(
+        kind="reference_choice",
+        prompt=prompt,
+        question_id=f"question-{uuid.uuid4().hex[:16]}",
+        goal_intent=goal_intent,
+        candidate_references=list(candidate_references),
+    )
+
+
+def intent_choice_interaction(
+    prompt: str,
+    candidate_intents: tuple[str, ...],
+) -> PendingInteraction:
+    """Persist an AI-authored intent question as model-visible dialogue state."""
+
+    return PendingInteraction(
+        kind="intent_choice",
+        prompt=prompt,
+        question_id=f"question-{uuid.uuid4().hex[:16]}",
+        candidate_intents=list(candidate_intents),
     )
 
 
@@ -123,168 +249,3 @@ def preceding_interaction(messages) -> tuple[PendingInteraction, Any] | None:
         interaction = parse_interaction(getattr(message, "interaction_json", None))
         return (interaction, message) if interaction else None
     return None
-
-
-def selected_choice_action(messages) -> dict[str, Any] | None:
-    """Resolve a visible choice without asking a model to reinterpret it.
-
-    Exact visible-text matching remains the default. Natural replies can also
-    select one uniquely identifiable option because every candidate still
-    resolves to an application-owned typed action.
-    """
-    pending = preceding_interaction(messages)
-    if pending is None:
-        return None
-    interaction, assistant_message = pending
-    if interaction.kind != "choice" or not assistant_message.view_payload_json:
-        return None
-    latest_customer_text = next(
-        (message.text for message in reversed(messages) if message.role == "user"),
-        "",
-    )
-    normalized_customer_text = _choice_text(latest_customer_text)
-    if not normalized_customer_text:
-        return None
-    try:
-        payload = json.loads(assistant_message.view_payload_json)
-    except (TypeError, ValueError):
-        return None
-    suggestions = payload.get("suggestions") if isinstance(payload, dict) else None
-    if not isinstance(suggestions, list):
-        return None
-    allowed_actions = interaction.actions
-    matches: list[dict[str, Any]] = []
-    for suggestion in suggestions:
-        if not isinstance(suggestion, dict) or not isinstance(suggestion.get("action"), dict):
-            continue
-        action = dict(suggestion["action"])
-        if action not in allowed_actions:
-            continue
-        visible_text = {
-            _choice_text(str(suggestion.get(field) or ""))
-            for field in ("label", "text")
-        }
-        visible_text.discard("")
-        if normalized_customer_text in visible_text:
-            matches.append(action)
-    if len(matches) == 1:
-        return matches[0]
-    return _natural_choice_action(
-        normalized_customer_text,
-        suggestions,
-        allowed_actions,
-        interaction.prompt,
-    )
-
-
-def _choice_text(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    return " ".join(re.findall(r"[a-z0-9]+", normalized))
-
-
-_CHOICE_FILLER_WORDS = {
-    "a",
-    "an",
-    "book",
-    "booking",
-    "can",
-    "choose",
-    "could",
-    "for",
-    "i",
-    "like",
-    "me",
-    "my",
-    "need",
-    "option",
-    "please",
-    "select",
-    "show",
-    "the",
-    "to",
-    "use",
-    "want",
-    "would",
-}
-
-_CHOICE_NEGATIONS = {"avoid", "never", "no", "not", "without"}
-
-
-def _natural_choice_action(
-    normalized_customer_text: str,
-    suggestions: list[Any],
-    allowed_actions: list[dict[str, Any]],
-    prompt: str,
-) -> dict[str, Any] | None:
-    """Match a unique trusted option while refusing negated or ambiguous replies."""
-    if not allowed_actions:
-        return None
-    raw_customer_words = normalized_customer_text.split()
-    if _has_choice_negation(raw_customer_words):
-        return None
-    customer_terms = _choice_terms(normalized_customer_text) - _choice_terms(
-        _choice_text(prompt)
-    )
-    if not customer_terms:
-        return None
-
-    candidates: list[tuple[dict[str, Any], set[str]]] = []
-    for suggestion in suggestions:
-        if not isinstance(suggestion, dict) or not isinstance(suggestion.get("action"), dict):
-            continue
-        action = dict(suggestion["action"])
-        if action not in allowed_actions:
-            continue
-        visible_terms = _choice_terms(
-            " ".join(
-                _choice_text(str(suggestion.get(field) or ""))
-                for field in ("label", "text")
-            )
-        )
-        if visible_terms:
-            candidates.append((action, visible_terms))
-
-    term_frequency: dict[str, int] = {}
-    for _action, terms in candidates:
-        for term in terms:
-            term_frequency[term] = term_frequency.get(term, 0) + 1
-
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for action, visible_terms in candidates:
-        matched_terms = customer_terms & visible_terms
-        unique_terms = {term for term in matched_terms if term_frequency[term] == 1}
-        if unique_terms:
-            scored.append((len(matched_terms), action))
-
-    if not scored:
-        return None
-    best_score = max(score for score, _action in scored)
-    best_actions = [action for score, action in scored if score == best_score]
-    return best_actions[0] if len(best_actions) == 1 else None
-
-
-def _choice_terms(value: str) -> set[str]:
-    aliases = {
-        "automatics": "automatic",
-        "callback": "call",
-        "callbacks": "call",
-        "fitted": "fit",
-        "fitting": "fit",
-        "messages": "message",
-        "tire": "tyre",
-        "tires": "tyre",
-        "tyres": "tyre",
-    }
-    terms: set[str] = set()
-    for word in value.split():
-        canonical = aliases.get(word, word)
-        if canonical not in _CHOICE_FILLER_WORDS:
-            terms.add(canonical)
-    return terms
-
-
-def _has_choice_negation(words: list[str]) -> bool:
-    return bool(_CHOICE_NEGATIONS.intersection(words)) or any(
-        words[index : index + 2] == ["don", "t"]
-        for index in range(max(0, len(words) - 1))
-    )

@@ -22,6 +22,9 @@ class ConversationContext:
     displayed_dealership_ids: tuple[str, ...]
     active_offer: str | None
     active_vehicle: str | None
+    active_workflow: str | None
+    workflow_stage: str | None
+    workflow_last_renderer: str | None
     active_workshop_service: str | None
     active_workshop_service_id: str | None
     selected_test_drive_vehicle: str | None
@@ -48,6 +51,13 @@ class ConversationContext:
             "vehicleId",
             r"veh-[0-9]{3}",
         )
+        focused_vehicle = _developer_value(
+            messages,
+            "Current conversationally focused vehicle from the immediately preceding "
+            "grounded answer (trusted displayed candidate): ",
+            "vehicleId",
+            r"veh-[0-9]{3}",
+        )
         workflow_vehicle = _developer_value(
             messages,
             "Active application workflow state (trusted data): ",
@@ -71,6 +81,18 @@ class ConversationContext:
             "Active application workflow state (trusted data): ",
             "serviceTypeName",
             r'[^"\\]{1,200}',
+        )
+        workflow_stage = _developer_value(
+            messages,
+            "Active application workflow state (trusted data): ",
+            "stage",
+            r"[a-z][a-z_]{0,39}",
+        )
+        workflow_last_renderer = _developer_value(
+            messages,
+            "Active application workflow state (trusted data): ",
+            "lastRenderer",
+            r"[a-z][a-z_]{0,79}",
         )
         displayed_vehicles = tuple(
             _developer_json_list(
@@ -129,8 +151,11 @@ class ConversationContext:
             active_vehicle=(
                 explicit_ids[-1]
                 if explicit_ids
-                else selected_vehicle or workflow_vehicle or page_vehicle
+                else selected_vehicle or workflow_vehicle or page_vehicle or focused_vehicle
             ),
+            active_workflow=active_workflow,
+            workflow_stage=workflow_stage,
+            workflow_last_renderer=workflow_last_renderer,
             active_workshop_service=(
                 workflow_service_name if str(active_workflow or "").startswith("workshop") else None
             ),
@@ -142,13 +167,24 @@ class ConversationContext:
             has_tool_result=_has_current_turn_tool_result(messages),
         )
 
+    def is_choosing_workshop_service(self) -> bool:
+        return bool(
+            self.active_workflow == "workshop_booking"
+            and not self.active_workshop_service
+            and not self.active_workshop_service_id
+            and (
+                self.workflow_stage == "choosing_service"
+                or self.workflow_last_renderer == "service_list"
+            )
+        )
+
     def refers_to_active_vehicle(self) -> bool:
         """Whether the latest turn explicitly points at page/selected vehicle context."""
         if re.search(r"\bveh-[0-9]{3}\b", self.latest.lower()):
             return True
         return bool(
             re.search(
-                r"\b(?:this|that|it)\b|\b(?:selected|current)\s+(?:car|vehicle)\b",
+                r"\b(?:this|that|it)\b|\b(?:the|selected|current)\s+(?:car|vehicle)\b",
                 self.latest,
                 re.IGNORECASE,
             )

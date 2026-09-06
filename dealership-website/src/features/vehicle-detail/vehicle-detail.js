@@ -69,7 +69,9 @@ export async function showVehicleDetail({ vehicleId, dialog, container }) {
       get(`/api/vehicles/${vehicleId}/availability`),
     ]);
     container.innerHTML = vehicleDetail(vehicle, availability);
+    return { ok: true };
   } catch (error) {
     container.innerHTML = detailError(error);
+    return { ok: false, reason: String(error?.message || "Vehicle details unavailable") };
   }
 }

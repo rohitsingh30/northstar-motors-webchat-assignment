@@ -11,10 +11,10 @@ from starlette.responses import JSONResponse
 MAX_BODY = 64 * 1024
 
 
-def problem(status: int, code: str, message: str) -> JSONResponse:
+def problem(status: int, code: str, message: str, *, retryable: bool = False) -> JSONResponse:
     return JSONResponse(
         status_code=status,
-        content={"error": {"code": code, "message": message, "retryable": False}},
+        content={"error": {"code": code, "message": message, "retryable": retryable}},
     )
 
 
@@ -55,14 +55,23 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             if not missing_allowed_for_tests and origin != self.settings.webchat_allowed_origin:
                 return problem(403, "ORIGIN_REJECTED", "The request origin is not allowed.")
 
-        client = self._client_address(request)
-        now = time.monotonic()
-        recent = self.requests[client]
-        while recent and recent[0] < now - 60:
-            recent.popleft()
-        if len(recent) >= self.requests_per_minute:
-            return problem(429, "RATE_LIMITED", "Too many chat requests. Please wait and retry.")
-        recent.append(now)
+        # Read-only restoration, history, and vehicle-image requests are supporting traffic, not
+        # customer submissions. Counting them in the mutation budget lets a normal page render
+        # rate-limit the next conversational turn.
+        if self.requests_per_minute and request.method in {"POST", "PATCH", "DELETE"}:
+            client = self._client_address(request)
+            now = time.monotonic()
+            recent = self.requests[client]
+            while recent and recent[0] < now - 60:
+                recent.popleft()
+            if len(recent) >= self.requests_per_minute:
+                return problem(
+                    429,
+                    "RATE_LIMITED",
+                    "Too many chat requests were sent in a short period. Please wait one minute and retry.",
+                    retryable=True,
+                )
+            recent.append(now)
         return None
 
     def _client_address(self, request: Request) -> str:

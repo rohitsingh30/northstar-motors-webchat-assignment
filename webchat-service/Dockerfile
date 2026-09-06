@@ -14,6 +14,9 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BA
 
 FROM dependencies AS test
 
+# The deterministic provider is available only in the isolated automated-test image.
+ENV ENVIRONMENT=test
+
 COPY webchat ./webchat
 COPY tests ./tests
 RUN --mount=type=cache,target=/root/.cache/pip pip install ".[dev]"

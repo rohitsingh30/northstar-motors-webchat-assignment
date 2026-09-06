@@ -10,6 +10,10 @@ from ..database import Database
 from .common import utc_now
 
 
+class StaleWorkflowDraftError(RuntimeError):
+    """Raised when a replacement no longer targets the active draft it reviewed."""
+
+
 class WorkflowRepository:
     def __init__(self, database: Database):
         self.database = database
@@ -21,6 +25,8 @@ class WorkflowRepository:
         fields: dict,
         fields_hash: str,
         status: str,
+        *,
+        expected_draft_id: str | None = None,
     ) -> dict:
         draft_id = str(uuid.uuid4())
         timestamp = utc_now()
@@ -31,11 +37,22 @@ class WorkflowRepository:
             .replace("+00:00", "Z")
         )
         with self.database.transaction() as connection:
-            connection.execute(
-                "UPDATE workflow_drafts SET status = 'cancelled', updated_at = ? "
-                "WHERE conversation_id = ? AND kind = ? AND status IN ('collecting', 'awaiting_confirmation')",
-                (timestamp, conversation_id, kind),
-            )
+            if expected_draft_id is not None:
+                replaced = connection.execute(
+                    "UPDATE workflow_drafts SET status = 'cancelled', updated_at = ? "
+                    "WHERE id = ? AND conversation_id = ? AND kind = ? "
+                    "AND status IN ('collecting', 'awaiting_confirmation') AND expires_at > ?",
+                    (timestamp, expected_draft_id, conversation_id, kind, timestamp),
+                ).rowcount
+                if replaced != 1:
+                    raise StaleWorkflowDraftError("the reviewed workflow draft is no longer active")
+            else:
+                connection.execute(
+                    "UPDATE workflow_drafts SET status = 'cancelled', updated_at = ? "
+                    "WHERE conversation_id = ? AND kind = ? "
+                    "AND status IN ('collecting', 'awaiting_confirmation')",
+                    (timestamp, conversation_id, kind),
+                )
             connection.execute(
                 "INSERT INTO workflow_drafts "
                 "(id, conversation_id, kind, version, status, fields_json, material_hash, "
@@ -56,6 +73,26 @@ class WorkflowRepository:
                 "SELECT * FROM workflow_drafts WHERE id = ?", (draft_id,)
             ).fetchone()
         return dict(row)
+
+    def latest_active(self, conversation_id: str, kind: str | None = None) -> dict | None:
+        """Return the current collecting/review draft for capability-state continuation."""
+
+        parameters: tuple[str, ...]
+        kind_clause = ""
+        if kind is None:
+            parameters = (conversation_id, utc_now())
+        else:
+            kind_clause = "AND kind = ? "
+            parameters = (conversation_id, kind, utc_now())
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM workflow_drafts WHERE conversation_id = ? "
+                + kind_clause
+                + "AND status IN ('collecting', 'awaiting_confirmation') "
+                "AND expires_at > ? ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+                parameters,
+            ).fetchone()
+        return dict(row) if row else None
 
     def statuses(self, conversation_id: str, draft_ids: list[str]) -> dict[str, str]:
         if not draft_ids:

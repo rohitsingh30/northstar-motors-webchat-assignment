@@ -56,11 +56,22 @@ class UnifiedToolCatalog:
         conversation_id: str | None = None,
         *,
         trusted_arguments: dict[str, Any] | None = None,
+        replacement_draft_id: str | None = None,
     ):
         definition = self.get(name)
         validated = definition.validate_arguments(arguments)
         trusted = definition.validate_trusted_arguments(trusted_arguments)
+        execution_metadata = (
+            {"replacement_draft_id": replacement_draft_id}
+            if replacement_draft_id is not None
+            else {}
+        )
         return await asyncio.wait_for(
-            self._executors[name].execute(name, {**validated, **trusted}, conversation_id),
+            self._executors[name].execute(
+                name,
+                {**validated, **trusted},
+                conversation_id,
+                **execution_metadata,
+            ),
             timeout=definition.timeout_seconds,
         )

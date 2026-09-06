@@ -1,4 +1,4 @@
-import { textElement } from "../core/dom.js";
+import { textElement } from "../core/dom.js?v=20260904.2";
 
 function validSuggestions(suggestions) {
   return (suggestions || []).filter(
@@ -6,18 +6,19 @@ function validSuggestions(suggestions) {
   );
 }
 
-function balancedSuggestions(suggestions) {
-  const valid = validSuggestions(suggestions);
-  return valid.length >= 4 ? valid.slice(0, 4) : valid.slice(0, 2);
-}
-
-export function suggestionChips(suggestions, { allowMany = false, className = "" } = {}) {
+export function suggestionChips(
+  suggestions,
+  { allowMany = false, balanceOptional = false, className = "" } = {},
+) {
   const group = document.createElement("div");
   group.className = `webchat-suggestions ${className}`.trim();
   group.setAttribute("aria-label", "Suggested replies");
-  const visibleSuggestions = allowMany
+  let visibleSuggestions = allowMany
     ? validSuggestions(suggestions)
-    : balancedSuggestions(suggestions);
+    : validSuggestions(suggestions).slice(0, 4);
+  if (balanceOptional && visibleSuggestions.length === 3) {
+    visibleSuggestions = visibleSuggestions.slice(0, 2);
+  }
   visibleSuggestions.forEach((suggestion) => {
     const button = textElement("button", "webchat-suggestion", suggestion.label);
     button.type = "button";

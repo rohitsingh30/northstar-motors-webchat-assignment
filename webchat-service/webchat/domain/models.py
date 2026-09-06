@@ -15,6 +15,9 @@ class Message:
     view_payload_json: str | None
     created_at: str
     interaction_json: str | None = None
+    purpose: str | None = None
+    segments_json: str | None = None
+    blocks_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -27,3 +30,5 @@ class Turn:
     error_category: str | None
     started_at: str
     completed_at: str | None
+    client_actions_json: str = "[]"
+    request_fingerprint: str | None = None

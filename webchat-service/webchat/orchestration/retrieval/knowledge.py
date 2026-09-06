@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from importlib.resources import files
 from typing import Any
 
+from webchat.domain.interactions import ActionHandoff
+
 
 @dataclass(frozen=True)
 class KnowledgeEntry:
@@ -14,6 +16,7 @@ class KnowledgeEntry:
     source: str
     audience: str = "customer"
     follow_up_action: dict[str, Any] | None = None
+    follow_up_handoff: ActionHandoff | None = None
 
     @property
     def searchable_text(self) -> str:
@@ -30,4 +33,11 @@ class KnowledgeIndex:
 def _load_entries() -> tuple[KnowledgeEntry, ...]:
     resource = files("webchat.orchestration.retrieval").joinpath("knowledge.json")
     payload = json.loads(resource.read_text(encoding="utf-8"))
-    return tuple(KnowledgeEntry(**item) for item in payload)
+    entries = []
+    for item in payload:
+        values = dict(item)
+        handoff = values.get("follow_up_handoff")
+        if isinstance(handoff, dict):
+            values["follow_up_handoff"] = ActionHandoff.model_validate(handoff)
+        entries.append(KnowledgeEntry(**values))
+    return tuple(entries)

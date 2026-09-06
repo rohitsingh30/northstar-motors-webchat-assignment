@@ -1,45 +1,60 @@
 // Keep all browser traffic behind the stable public webchat API.
 export function createChatApi(apiBase = "/api/chat/v1") {
   const root = apiBase.replace(/\/$/, "");
+  const activeRequests = new Set();
+  const replacementPath = (path, options = {}) => options.replacesDraftId
+    ? `${path}?replacesDraftId=${encodeURIComponent(options.replacesDraftId)}`
+    : path;
 
   async function request(path, options = {}) {
-    const response = await fetch(`${root}${path}`, {
-      ...options,
-      credentials: "include",
-      headers: { Accept: "application/json", ...(options.headers || {}) },
-    });
-    if (!response.ok) {
-      const problem = await response.json().catch(() => ({}));
-      const validationErrors = Array.isArray(problem.detail) ? problem.detail : [];
-      const fieldErrors = { ...(problem.error?.fieldErrors || {}) };
-      const formErrors = [];
-      validationErrors.forEach((item) => {
-        const field = item.loc?.at(-1);
-        const message = String(item.msg || "Check this field.").replace(/^Value error, /, "");
-        if (typeof field === "string" && !["body", "query", "path"].includes(field)) {
-          fieldErrors[field] = message;
-        } else {
-          formErrors.push(message);
-        }
+    const controller = new AbortController();
+    activeRequests.add(controller);
+    try {
+      const response = await fetch(`${root}${path}`, {
+        ...options,
+        signal: controller.signal,
+        credentials: "include",
+        headers: { Accept: "application/json", ...(options.headers || {}) },
       });
-      const error = new Error(
-        problem.error?.message
-          || formErrors[0]
-          || (Object.keys(fieldErrors).length ? "Check the highlighted fields." : null)
-          || problem.detail
-          || "Northstar chat is unavailable.",
-      );
-      error.status = response.status;
-      error.code = problem.error?.code || "CHAT_REQUEST_FAILED";
-      error.retryable = problem.error?.retryable === true;
-      error.fieldErrors = fieldErrors;
-      error.recovery = problem.error?.recovery || {};
-      throw error;
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}));
+        const validationErrors = Array.isArray(problem.detail) ? problem.detail : [];
+        const fieldErrors = { ...(problem.error?.fieldErrors || {}) };
+        const formErrors = [];
+        validationErrors.forEach((item) => {
+          const field = item.loc?.at(-1);
+          const message = String(item.msg || "Check this field.").replace(/^Value error, /, "");
+          if (typeof field === "string" && !["body", "query", "path"].includes(field)) {
+            fieldErrors[field] = message;
+          } else {
+            formErrors.push(message);
+          }
+        });
+        const error = new Error(
+          problem.error?.message
+            || formErrors[0]
+            || (Object.keys(fieldErrors).length ? "Check the highlighted fields." : null)
+            || problem.detail
+            || "Northstar chat is unavailable.",
+        );
+        error.status = response.status;
+        error.code = problem.error?.code || "CHAT_REQUEST_FAILED";
+        error.retryable = problem.error?.retryable === true;
+        error.fieldErrors = fieldErrors;
+        error.recovery = problem.error?.recovery || {};
+        throw error;
+      }
+      return response.status === 204 ? null : await response.json();
+    } finally {
+      activeRequests.delete(controller);
     }
-    return response.status === 204 ? null : response.json();
   }
 
   return {
+    cancelPendingRequests: () => {
+      activeRequests.forEach((controller) => controller.abort());
+      activeRequests.clear();
+    },
     listConversations: () => request("/conversations"),
     createConversation: (pageContext) => request("/conversations", {
       method: "POST",
@@ -59,16 +74,12 @@ export function createChatApi(apiBase = "/api/chat/v1") {
       `/conversations/${encodeURIComponent(conversationId)}`,
       { method: "DELETE" },
     ),
-    confirmDraft: (conversationId, draftId, clientActionId, expectedKind = "") => request(
-      `/conversations/${encodeURIComponent(conversationId)}/drafts/${encodeURIComponent(draftId)}/confirm`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientActionId, ...(expectedKind ? { expectedKind } : {}) }),
-      },
-    ),
     cancelDraft: (conversationId, draftId) => request(
       `/conversations/${encodeURIComponent(conversationId)}/drafts/${encodeURIComponent(draftId)}/cancel`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    ),
+    supersedeDraft: (conversationId, draftId) => request(
+      `/conversations/${encodeURIComponent(conversationId)}/drafts/${encodeURIComponent(draftId)}/supersede`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
     ),
     lookupWorkshopBooking: (conversationId, proof) => request(
@@ -79,59 +90,24 @@ export function createChatApi(apiBase = "/api/chat/v1") {
         body: JSON.stringify(proof),
       },
     ),
-    prepareExistingWorkshopAction: (conversationId, mode, bookingReference = "") => request(
-      `/conversations/${encodeURIComponent(conversationId)}/workshop-existing-action`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, ...(bookingReference ? { bookingReference } : {}) }),
-      },
-    ),
-    getTestDriveOptions: (conversationId, vehicleId) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/test-drive-options`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vehicleId }),
-      },
-    ),
-    prepareTestDrive: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/test-drive-drafts`,
+    prepareTestDrive: (conversationId, details, options) => request(
+      replacementPath(`/conversations/${encodeURIComponent(conversationId)}/test-drive-drafts`, options),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(details),
       },
     ),
-    getOfferEnquiryOptions: (conversationId, offerId) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/offer-enquiry-options`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ offerId }),
-      },
-    ),
-    getWorkshopOptions: (conversationId, serviceTypeId, dealershipId) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/workshop-options`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          serviceTypeId,
-          ...(dealershipId ? { dealershipId } : {}),
-        }),
-      },
-    ),
-    prepareWorkshopBooking: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/workshop-drafts`,
+    prepareWorkshopBooking: (conversationId, details, options) => request(
+      replacementPath(`/conversations/${encodeURIComponent(conversationId)}/workshop-drafts`, options),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(details),
       },
     ),
-    preparePartExchange: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/part-exchange-drafts`,
+    preparePartExchange: (conversationId, details, options) => request(
+      replacementPath(`/conversations/${encodeURIComponent(conversationId)}/part-exchange-drafts`, options),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -146,49 +122,37 @@ export function createChatApi(apiBase = "/api/chat/v1") {
         body: JSON.stringify(details),
       },
     ),
-    prepareCallback: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/callback-drafts`,
+    prepareCallback: (conversationId, details, options) => request(
+      replacementPath(`/conversations/${encodeURIComponent(conversationId)}/callback-drafts`, options),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(details),
       },
     ),
-    prepareSalesEnquiry: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/sales-enquiry-drafts`,
+    prepareSalesEnquiry: (conversationId, details, options) => request(
+      replacementPath(`/conversations/${encodeURIComponent(conversationId)}/sales-enquiry-drafts`, options),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(details),
       },
     ),
-    prepareVehicleInterest: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/vehicle-interest-drafts`,
+    prepareVehicleInterest: (conversationId, details, options) => request(
+      replacementPath(`/conversations/${encodeURIComponent(conversationId)}/vehicle-interest-drafts`, options),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(details),
       },
     ),
-    prepareDealershipMessage: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/dealership-message-drafts`,
+    prepareDealershipMessage: (conversationId, details, options) => request(
+      replacementPath(`/conversations/${encodeURIComponent(conversationId)}/dealership-message-drafts`, options),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(details),
       },
-    ),
-    prepareWorkshopAmendment: (conversationId, details) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/workshop-amendment-drafts`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(details),
-      },
-    ),
-    getWorkshopAmendmentOptions: (conversationId) => request(
-      `/conversations/${encodeURIComponent(conversationId)}/workshop-amendment-options`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
     ),
   };
 }

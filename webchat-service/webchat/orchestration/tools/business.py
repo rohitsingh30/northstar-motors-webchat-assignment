@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-from webchat.domain.interactions import single_action_interaction
+from webchat.domain.interactions import ActionHandoff, single_action_interaction
 from webchat.orchestration.tools.business_information import BusinessInformationResolver
 from webchat.orchestration.tools.inputs import BusinessInformationQuery
-from webchat.orchestration.tools.result import ToolResult
+from webchat.orchestration.tools.result import ToolResult, alternative_offer
 
 
 class BusinessInformationGateway(Protocol):
@@ -54,7 +54,30 @@ class BusinessInformationToolHandler:
                 None,
                 None,
                 facts,
-                single_action_interaction(text, {"type": "show_dealership_contact_options"}),
+                single_action_interaction(
+                    text,
+                    {"type": "show_dealership_contact_options"},
+                    handoff=ActionHandoff(
+                        topic=query.topic,
+                        customerReason=query.question,
+                    ),
+                ),
+                alternative_offer=alternative_offer(
+                    reason_code="confirmed_information_unavailable",
+                    requested_outcome=f"Confirmed Northstar information about {query.topic.replace('_', ' ')}",
+                    failure_reason="Northstar does not have confirmed online information that answers this question.",
+                    offered_outcome=(
+                        "You can contact a dealership team for a confirmed answer."
+                    ),
+                    changes=[
+                        {
+                            "dimension": "Answer channel",
+                            "requested": "Online information",
+                            "offered": "Dealership contact",
+                        }
+                    ],
+                    preserved=[query.topic.replace("_", " ")],
+                ),
             )
         if resolution.outcome == "ambiguous":
             labels = ", ".join(dict.fromkeys(fact.label for fact in resolution.facts))

@@ -12,6 +12,7 @@ dependencies. They do not require edits to `dealership-platform`.
 | [`integration/`](./integration/README.md) | FastAPI/session/security/restoration and end-to-end structured flow contracts |
 | [`contract/`](./contract/README.md) | Dealership HTTP adapter contract using representative mock responses |
 | [`browser/`](./browser/README.md) | Isolated Node ES-module tests for browser-only utilities |
+| `e2e/` | Playwright responsive UI checks plus configured-model product, exhaustive, and stress journeys |
 
 ## Run
 
@@ -27,7 +28,13 @@ docker run --rm northstar-webchat-test:refactor pytest -q tests/unit
 docker run --rm northstar-webchat-test:refactor pytest -q tests/integration
 docker run --rm northstar-webchat-test:refactor pytest -q tests/contract
 node --test webchat-service/tests/browser/*.mjs
+npm run test:real-ai
+npm run test:real-ai:stress
 ```
+
+The configured-model commands require the running Compose stack and valid hosted-provider
+credentials. `npm run test:real-ai` currently discovers 137 journeys; the stress command discovers
+169. Test discovery is not a pass result.
 
 A Starlette/httpx deprecation warning is emitted by the test-client dependency and is not a test
 failure.

@@ -1,31 +1,32 @@
 # Widget view modules
 
-Views convert closed server-authored payloads into safe Shadow DOM elements. They do not perform
-network requests or own conversation state.
-
-## Files
+Views materialize closed server payloads into safe Shadow DOM. They do not perform requests, route
+intent, mutate workflow state, or accept executable actions from card payloads.
 
 | File | Responsibility |
 | --- | --- |
-| [`message.js`](./message.js) | Small closed view-type dispatcher and stable public facade |
-| [`message-content.js`](./message-content.js) | Safe assistant text grouping into paragraphs and explicit list presentation |
-| [`suggestions.js`](./suggestions.js) | Balanced suggestion chips and typed action data |
-| [`vehicle.js`](./vehicle.js) | Vehicle card, availability card, image/navigation behavior, comparison table |
-| [`appointments.js`](./appointments.js) | Test-drive/workshop slot pickers, detail forms, inline confirmations, and booking disclosures |
-| [`information-cards.js`](./information-cards.js) | Offers, dealerships, hours, services, and generic read-only facts |
-| [`workflow-forms.js`](./workflow-forms.js) | Collecting-state forms and draft cards |
-| [`workflow-confirmations.js`](./workflow-confirmations.js) | Application-owned protected-write review cards |
-| [`workflow-receipts.js`](./workflow-receipts.js) | Public receipts, private lookup form, and restored booking views |
-| [`workflow-cards.js`](./workflow-cards.js) | Stable workflow-renderer facade |
+| `message.js` | closed view dispatcher |
+| `message-content.js` | safe paragraphs, lists, and trusted text/link segments |
+| `structured-collection.js` | semantic trusted option/fact lists |
+| `suggestions.js` | external quick replies and typed action data |
+| `vehicle.js` | vehicle visuals plus the fixed trusted-ID modal control |
+| `appointments.js` | one selected appointment summary plus read-only booking visuals |
+| `information-cards.js` | read-only offer/dealership/hours/service/fact visuals |
+| `workflow-confirmations.js` | static protected-write review visuals |
+| `workflow-receipts.js` | read-only public receipts/restored booking views |
+| `workflow-cards.js` | workflow view facade |
 
-## Adding a view
+Structured appointment details render as plain semantic bullets. A separate row uses the ordinary
+simple reply component: its concise labels are server-authored, and each reply submits the exact
+canonical appointment label through the same turn endpoint. Trusted IDs remain only in the
+persisted server choice contract. Compact workflow scalar values and intentionally selected
+follow-up answers use the same reply component; detailed entity/reference choices stay as bullets.
+The retired rich collection-chip renderer is not used. Semantic bullet collections are appended to
+an assistant bubble. For detailed choices, the renderer places that bullet bubble before a separate
+question bubble and then appends any intentional simple replies; informational lists remain inside
+their ordinary answer bubble. The same ordering projection covers restored legacy messages.
 
-1. Define a versioned server payload with only public fields.
-2. Add a small renderer or focused module.
-3. Register the view type in `message.js`.
-4. Add it to response renderability when provider-loop termination requires it.
-5. Use DOM properties, validated IDs, and controlled navigation; never model HTML.
-6. Add integration coverage and a manual accessibility/browser check.
-
-Add behavior to the owning family module. `message.js` should remain limited to dispatch and stable
-exports; it must not accumulate card or form implementation details.
+All runtime text uses safe DOM properties/helpers. Card payloads must not contain anchors, buttons,
+form controls, embedded chips, executable URLs, or click handlers. The vehicle renderer alone adds
+a fixed modal button for a validated vehicle ID; other operations live in typed conversation or
+suggestion controls outside the card.

@@ -91,10 +91,13 @@ def _missing_fields_summary(facts: dict[str, Any]) -> str:
         "mileage": "the vehicle mileage",
         "condition": "the vehicle condition",
     }
-    fields = ", ".join(labels.get(str(field), str(field)) for field in facts["missingFields"])
+    fields = "\n".join(
+        f"- {labels.get(str(field), str(field)).capitalize()}"
+        for field in facts["missingFields"]
+    )
     if facts.get("kind") == "part_exchange":
-        return "I can prepare sales follow-up. Please complete the short form below."
-    return f"I can help with that. Please provide {fields}."
+        return "I can prepare the sales follow-up. Tell me the remaining details here."
+    return f"I can help with that. Please provide:\n{fields}"
 
 
 def _vehicle_summary(context: ConversationContext, facts: dict[str, Any]) -> str:
@@ -135,7 +138,9 @@ def _department_summary(context: ConversationContext, facts: dict[str, Any]) -> 
             for department in item.get("departments", [])
         }
     )
-    return "Available departments: " + ", ".join(departments) + "."
+    return "Available departments:\n" + "\n".join(
+        f"- {department}" for department in departments
+    )
 
 
 def _service_list_summary(context: ConversationContext, facts: dict[str, Any]) -> str:
@@ -151,10 +156,12 @@ def _service_summary(context: ConversationContext, facts: dict[str, Any]) -> str
     duration = service.get("durationMinutes")
     price = service.get("priceFromPence")
     price_text = f"from £{price / 100:,.0f}" if isinstance(price, int) else "priced on request"
-    duration_text = f" and takes about {duration} minutes" if isinstance(duration, int) else ""
+    duration_text = f"About {duration} minutes" if isinstance(duration, int) else "Not confirmed"
     description = str(service.get("description") or "").strip()
-    suffix = f" {description}" if description else ""
-    return f"{name} is {price_text}{duration_text}.{suffix}"
+    details = [f"Price: {price_text}", f"Duration: {duration_text}"]
+    if description:
+        details.append(f"Description: {description}")
+    return f"{name}:\n" + "\n".join(f"- {detail}" for detail in details)
 
 
 def _slot_summary(context: ConversationContext, facts: dict[str, Any]) -> str:

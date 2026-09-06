@@ -1,5 +1,5 @@
-import { textElement } from "../core/dom.js";
-import { moneyFromPence } from "../core/format.js";
+import { textElement } from "../core/dom.js?v=20260904.2";
+import { moneyFromPence } from "../core/format.js?v=20260904.2";
 
 const WIDGET_SERVICE_ORIGIN = new URL(import.meta.url).origin;
 
@@ -27,11 +27,24 @@ export function vehicleCard(item) {
   if (item.availability && item.availability !== "available") {
     media.append(textElement("span", `webchat-availability ${item.availability}`, item.availability));
   }
+  if (/^veh-[0-9]{3}$/.test(item.id || "")) {
+    const viewButton = textElement("button", "webchat-vehicle-view", "View vehicle");
+    viewButton.type = "button";
+    viewButton.dataset.vehicleDetail = item.id;
+    viewButton.setAttribute(
+      "aria-label",
+      `View ${[item.make, item.model].filter(Boolean).join(" ") || "vehicle"} details`,
+    );
+    media.append(viewButton);
+  }
 
   const content = document.createElement("div");
   content.className = "webchat-vehicle-content";
   const identity = document.createElement("div");
   identity.className = "webchat-vehicle-identity";
+  if (Number.isInteger(item.optionNumber)) {
+    identity.append(textElement("span", "webchat-option-number", `Option ${item.optionNumber}`));
+  }
   identity.append(
     textElement(
       "p",
@@ -66,39 +79,7 @@ export function vehicleCard(item) {
   );
   content.append(summary, specs);
 
-  const actions = document.createElement("div");
-  actions.className = "webchat-vehicle-actions";
-  if (/^veh-[0-9]{3}$/.test(item.id || "")) {
-    const link = textElement("a", "webchat-secondary-action", "View details");
-    link.href = `/?vehicle=${encodeURIComponent(item.id)}`;
-    link.addEventListener("click", (event) => {
-      const navigation = new CustomEvent("northstar-chat:navigate", {
-        bubbles: true,
-        composed: true,
-        cancelable: true,
-        detail: { type: "vehicle", vehicleId: item.id, href: link.getAttribute("href") },
-      });
-      if (!link.dispatchEvent(navigation)) event.preventDefault();
-    });
-    actions.append(link);
-    if (item.availability === "available") {
-      const testDrive = textElement("button", "webchat-primary-action", "Book test drive");
-      testDrive.type = "button";
-      testDrive.dataset.chatAction = "test-drive";
-      testDrive.dataset.vehicleId = item.id;
-      testDrive.dataset.vehicleLabel = `${item.make || ""} ${item.model || ""}`.trim();
-      testDrive.setAttribute("aria-expanded", "false");
-      testDrive.setAttribute("aria-controls", `webchat-booking-flow-${item.id}`);
-      actions.append(testDrive);
-    }
-  }
-  content.append(actions);
-  const bookingFlow = document.createElement("div");
-  bookingFlow.className = "webchat-booking-flow";
-  bookingFlow.id = `webchat-booking-flow-${item.id}`;
-  bookingFlow.dataset.bookingFlow = "true";
-  bookingFlow.hidden = true;
-  card.append(media, content, bookingFlow);
+  card.append(media, content);
   return card;
 }
 

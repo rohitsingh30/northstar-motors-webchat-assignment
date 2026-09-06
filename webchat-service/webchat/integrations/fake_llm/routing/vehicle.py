@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
+
 from webchat.integrations.contracts import ProviderReply
+from webchat.orchestration.contracts.plan import InteractionProposal
 
 from .base import clarify, tool
 from .context import ConversationContext
@@ -39,6 +42,7 @@ class VehicleRouter:
             self._comparison,
             self._interest,
             self._availability,
+            self._open_on_website,
             self._details_or_missing_context,
             self._test_drive_request,
             self._discovery,
@@ -50,6 +54,30 @@ class VehicleRouter:
             if reply is not None:
                 return reply
         return None
+
+    @staticmethod
+    def _open_on_website(context: ConversationContext) -> ProviderReply | None:
+        asks_to_open = "open" in context.words or (
+            "view" in context.words and "detail" in context.words
+        ) or "full details" in context.normalized
+        if not asks_to_open:
+            return None
+        vehicle_id = _referenced_displayed_vehicle(context)
+        if vehicle_id is None and context.active_vehicle and context.refers_to_active_vehicle():
+            vehicle_id = context.active_vehicle
+        if vehicle_id is None:
+            return clarify(
+                "Which vehicle would you like me to open?",
+                "get_vehicle",
+                fields=("id",),
+            )
+        return ProviderReply(
+            "",
+            interaction_proposal=InteractionProposal(
+                kind="open_vehicle_detail",
+                entityReference=f"vehicle:{vehicle_id}",
+            ),
+        )
 
     @staticmethod
     def _selected_action(context: ConversationContext) -> ProviderReply | None:
@@ -197,7 +225,14 @@ class VehicleRouter:
 
     @staticmethod
     def _details_or_missing_context(context: ConversationContext) -> ProviderReply | None:
-        asks_for_facts = context.words.intersection({"price", "details", "detail"}) or (
+        asks_to_show_singular = bool(
+            "show" in context.words
+            and context.words.intersection({"car", "vehicle"})
+            and not context.words.intersection({"cars", "vehicles", "all"})
+        )
+        asks_for_facts = asks_to_show_singular or context.words.intersection(
+            {"price", "details", "detail"}
+        ) or (
             context.words.intersection({"mileage", "fuel", "gearbox", "monthly", "payment"})
             and context.words.intersection({"what", "which", "tell", "show"})
         )
@@ -305,3 +340,24 @@ def _is_deictic_vehicle_query(value: str) -> bool:
     return set(value.lower().split()).issubset(
         {"this", "that", "the", "selected", "current", "vehicle", "car", "it"}
     )
+
+
+def _referenced_displayed_vehicle(context: ConversationContext) -> str | None:
+    ordinals = {"first": 0, "1": 0, "second": 1, "2": 1, "third": 2, "3": 2, "fourth": 3, "4": 3}
+    reference_tokens = set(context.words) | set(re.findall(r"\b[1-4]\b", context.normalized))
+    indexes = {ordinals[word] for word in reference_tokens if word in ordinals}
+    if len(indexes) == 1:
+        index = indexes.pop()
+        if index < len(context.displayed_vehicle_ids):
+            return context.displayed_vehicle_ids[index]
+    query_words = set(context.words) - {"open", "view", "show", "me", "the", "full", "detail", "details", "car", "vehicle"}
+    if query_words:
+        matches = []
+        for item in context.displayed_vehicles:
+            searchable = " ".join(str(value or "") for value in item.values()).casefold()
+            if all(word in searchable for word in query_words):
+                matches.append(str(item.get("vehicleId") or ""))
+        matches = [value for value in matches if value]
+        if len(matches) == 1:
+            return matches[0]
+    return context.displayed_vehicle_ids[0] if len(context.displayed_vehicle_ids) == 1 else None

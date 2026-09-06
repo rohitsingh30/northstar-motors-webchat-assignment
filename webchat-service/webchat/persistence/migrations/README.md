@@ -1,26 +1,19 @@
 # SQLite migrations
 
-Migrations run in filename order during service startup. Applied filenames are recorded in
-`schema_migrations`; existing migration files are therefore immutable.
-
-## Files
+Migrations run in filename order during startup and applied filenames are immutable.
 
 | Migration | Change |
 | --- | --- |
-| [`001_initial.sql`](./001_initial.sql) | Create conversations, turns, messages, uniqueness, and message ordering index |
-| [`002_conversation_sessions.sql`](./002_conversation_sessions.sql) | Add shared browser-session hash and session conversation index |
-| [`002_workflows.sql`](./002_workflows.sql) | Add workflow drafts, operation attempts, idempotency/action uniqueness, verified booking grants |
-| [`003_initial_page_context.sql`](./003_initial_page_context.sql) | Preserve the conversation's starting page separately from current page context |
-| [`004_conversation_workflow_state.sql`](./004_conversation_workflow_state.sql) | Persist canonical deterministic workflow state on conversations |
-| [`005_message_interactions.sql`](./005_message_interactions.sql) | Attach validated pending-interaction metadata to assistant messages |
+| `001_initial.sql` | conversations, turns, messages, ordering |
+| `002_conversation_sessions.sql` | browser-session identity |
+| `002_workflows.sql` | workflow drafts, attempts, idempotency, verification grants |
+| `003_initial_page_context.sql` | initial/current page context split |
+| `004_conversation_workflow_state.sql` | legacy workflow state column |
+| `005_message_interactions.sql` | message interaction metadata |
+| `006_conversation_state_results_interactions.sql` | authoritative state JSON, trusted result sets, protected interactions |
+| `007_message_segments.sql` | grounded structured message segments |
+| `008_turn_request_fingerprint.sql` | exact duplicate-request fingerprinting |
+| `009_message_blocks.sql` | explicit grounded paragraph/list presentation blocks |
 
-The duplicate numeric prefix on the two `002` migrations is historical; full filenames are the
-applied versions and sort deterministically. Do not rename them after use.
-
-## Adding a migration
-
-1. Choose the next unused numeric prefix.
-2. Make the SQL safe for a database that has every previous migration.
-3. Update repositories and tests.
-4. Run the repeatability test in `tests/unit/test_database.py`.
-5. Update `docs/LLD.md` and this table.
+The two historical `002` filenames sort deterministically and must not be renamed. Add a new
+numbered migration for every schema change and run the migration repeatability tests.

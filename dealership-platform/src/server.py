@@ -232,10 +232,24 @@ class Handler(BaseHTTPRequestHandler):
             return platform.cancel_workshop_booking(match.group(1)), 200
         raise ApiError(404, "NOT_FOUND", "Endpoint was not found.")
 
-    def _request_parts(self) -> tuple[str, dict[str, str]]:
+    def _request_parts(self) -> tuple[str, dict[str, Any]]:
         parsed = urlparse(self.path)
+        list_parameters = {
+            "makes",
+            "models",
+            "colours",
+            "fuelTypes",
+            "transmissions",
+            "bodyStyles",
+            "excludedMakes",
+            "excludedModels",
+            "excludedFuelTypes",
+            "excludedTransmissions",
+            "excludedBodyStyles",
+        }
         return parsed.path.rstrip("/") or "/", {
-            key: values[-1] for key, values in parse_qs(parsed.query).items()
+            key: values if key in list_parameters else values[-1]
+            for key, values in parse_qs(parsed.query).items()
         }
 
     def _read_json(self) -> dict[str, Any]:

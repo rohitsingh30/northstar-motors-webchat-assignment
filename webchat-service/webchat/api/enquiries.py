@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Request
 
 from webchat.domain.workflows import offer_enquiry_fields
-from webchat.orchestration.state import workflow_state
+from webchat.orchestration.state import WorkflowStateReducer
 
 from .dependencies import _authorize, _tool_view
 from .models import (
@@ -30,16 +32,16 @@ async def test_drive_options(
     result = await request.app.state.tools.execute(
         "list_test_drive_slots", {"vehicleId": body.vehicleId}, conversation_id
     )
+    current = request.app.state.conversations.get_workflow_state(conversation_id)
     request.app.state.conversations.update_workflow_state(
         conversation_id,
-        {
-            **workflow_state(
-                "test_drive",
-                "choosing_time",
-                entities={"vehicleId": body.vehicleId},
-            ),
-            "lastTool": "list_test_drive_slots",
-        },
+        WorkflowStateReducer().advance(
+            current,
+            "list_test_drive_slots",
+            {"vehicleId": body.vehicleId},
+            result.view_type,
+            result.facts,
+        ),
     )
     return {"viewType": result.view_type, "view": result.view_payload}
 
@@ -81,7 +83,41 @@ async def estimate_part_exchange(
     conversation_id: str, body: PartExchangeEstimateRequest, request: Request
 ) -> dict:
     _authorize(request, conversation_id)
-    return await _tool_view(request, conversation_id, "estimate_part_exchange", body.model_dump())
+    result = await request.app.state.tools.execute(
+        "estimate_part_exchange", body.model_dump(), conversation_id
+    )
+    current_state = request.app.state.conversations.get_workflow_state(conversation_id)
+    next_state = WorkflowStateReducer().advance(
+        current_state,
+        "estimate_part_exchange",
+        {},
+        result.view_type,
+        result.facts,
+    )
+    request.app.state.conversations.update_workflow_state(conversation_id, next_state)
+    safe_view = {
+        key: value
+        for key, value in (result.view_payload or {}).items()
+        if key not in {"registration", "mileage", "condition"}
+    }
+    response_text = (
+        "Here is the platform's indicative part-exchange range. "
+        "Would you like help continuing with the part exchange?"
+    )
+    request.app.state.messages.add(
+        conversation_id,
+        "assistant",
+        response_text,
+        None,
+        "part_exchange_estimate",
+        json.dumps(safe_view, separators=(",", ":")),
+        purpose="answer",
+    )
+    return {
+        "text": response_text,
+        "viewType": "part_exchange_estimate",
+        "view": safe_view,
+    }
 
 
 @router.post("/conversations/{conversation_id}/callback-drafts")

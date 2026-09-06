@@ -1,177 +1,160 @@
 # Northstar Motors AI Webchat
 
-Website - [https://gtk-slow-eval-ourselves.trycloudflare.com/](https://scheduling-production-modifications-producers.trycloudflare.com/)
+Live website: [https://scheduling-production-modifications-producers.trycloudflare.com/](https://scheduling-production-modifications-producers.trycloudflare.com/)
 
-This repository contains the Northstar Motors website, supplied local dealership platform, and a
-server-side AI webchat. The webchat keeps protected dealership operations and credentials out of
-the browser, stores anonymous conversations in SQLite, and uses explicit confirmation before any
-business record is created or changed.
+This repository contains the supplied Northstar Motors website and dealership platform plus a
+server-side conversational assistant. It helps customers discover vehicles, get accurate
+dealership information, and complete common sales and workshop tasks using authoritative platform
+data.
 
-## Start
+The implementation covers the journeys required by [PRODUCT-BRIEF.md](./PRODUCT-BRIEF.md):
+
+- natural-language vehicle search, refinement, comparison, availability, details, and offers;
+- sales enquiries, callbacks, reserved-vehicle interest, and confirmed test-drive bookings;
+- service discovery plus new, retrieved, amended, and cancelled workshop bookings;
+- dealership details, opening hours and exceptions, messages, callbacks, and indicative
+  part-exchange estimates;
+- responsive, keyboard-usable conversation with page context, persisted history, progress states,
+  trusted links and choices, explicit confirmations, and recoverable errors.
+
+## Run locally
 
 Requirements:
 
 - Docker with Docker Compose
-- Ports `4010`, `4020`, and `4173` available
-
-Copy the environment template:
+- ports `4010`, `4020`, and `4173`
+- a Responses-compatible LLM endpoint, API key, and model
 
 ```bash
 cp .env.example .env
 ```
 
-Set the three provider-neutral `LLM_*` values in `.env` for hosted AI responses. The planner and
-reviewer are compulsory separate requests to the supplied Responses-compatible provider and share
-one API key and model.
-Without a complete hosted configuration, development and test environments use the deterministic
-local provider. Do not add either the LLM key or dealership API key to browser code.
+Set these values in the uncommitted `.env` file:
+
+```dotenv
+LLM_PROVIDER_URL=https://your-provider.example/v1
+LLM_API_KEY=replace-me
+LLM_MODEL=replace-me
+```
+
+Development and production startup fail when any of those values is missing. The deterministic
+provider is available only when `ENVIRONMENT=test`; a configured hosted-provider failure never
+falls back to it.
 
 ```bash
 docker compose up --build -d
 ```
 
-Then open:
+Open:
 
-- Dealership website: http://localhost:4173
-- API documentation: http://localhost:4010/docs
-- Dealership Systems Console: http://localhost:4010/admin
+- website and webchat: http://localhost:4173
+- dealership API: http://localhost:4010
+- dealership API docs: http://localhost:4010/docs
+- dealership systems console: http://localhost:4010/admin
+- webchat service: http://localhost:4020
 
-The standalone webchat API is available at `http://localhost:4020`. Its restricted CORS policy
-accepts the configured website origin and supports the widget's HttpOnly conversation cookie.
+Database migrations run automatically when each service starts. The webchat database is stored in
+the `northstar-webchat-data` volume.
 
-Public catalogue and reference reads do not require authentication. Saved customer-record reads
-and write operations require this local API key:
+## How it works
 
-```text
-northstar-local-development
-```
+The website loads a browser widget served by the FastAPI webchat service. A configured hosted model
+interprets the customer's turn, selects from an application-controlled tool catalogue, and composes
+the response from validated results. Application code validates intent/tool compatibility, entity
+references, arguments, links, and protected actions before calling the dealership platform.
 
-Send it using the `X-API-Key` header. Keep the key in server-side code rather than
-browser-delivered code.
+The dealership platform remains authoritative for dynamic business facts and operation outcomes.
+SQLite stores the transcript, page context, workflow progress, trusted result references, and
+idempotency state so a conversation can survive refreshes and interrupted requests.
 
-Start with:
+## Privacy and protected operations
 
-- [PRODUCT-BRIEF.md](./PRODUCT-BRIEF.md) for the product requirements;
-- [webchat-service/README.md](./webchat-service/README.md) for service operation and the complete
-  module documentation map;
-- [docs/INTEGRATION-GUIDE.md](./docs/INTEGRATION-GUIDE.md) for API usage;
-- [docs/BUSINESS-SEMANTICS.md](./docs/BUSINESS-SEMANTICS.md) for operation outcomes;
-- [docs/SEEDED-SCENARIOS.md](./docs/SEEDED-SCENARIOS.md) for the seed data catalogue.
-
-## How the webchat works
-
-```text
-Browser widget
-    │ restricted-origin JSON + HttpOnly conversation cookie
-    ▼
-Webchat service ──► hosted planner call
-                └─► compulsory independent reviewer call
-    │
-    ├──► SQLite conversation/workflow state
-    └──► Dealership platform (authoritative reads and confirmed writes)
-```
-
-Semantic retrieval supplies relevant definitions from one unified application/MCP tool catalogue
-plus evidence generated from the product and business documents. The hosted model proposes concrete
-tool calls. A separate stateless reviewer request accepts, corrects, clarifies, or rejects the
-proposal before deterministic policy and execution. Neither request can call the confirmation
-executor. Application code validates the draft, waits for the user to press Confirm, persists an
-idempotency key, and only then sends the protected dealership request.
-
-Workshop booking lookup is separate from ordinary chat: reference, surname, registration, and
-phone are sent directly to a deterministic endpoint and are not stored in the transcript, model
-input, draft, or logs.
+- Dealership and LLM credentials remain server-side.
+- Contact details and booking-verification proof use protected endpoints and are excluded from the
+  normal chat transcript, model context, and operational logs.
+- The model may prepare a draft but cannot confirm a business operation. The customer must review
+  and explicitly confirm each write.
+- Confirmed operations are idempotent, and live availability is rechecked where required.
+- Platform facts, prices, links, appointment times, and completion statuses are grounded in trusted
+  application data rather than invented by the model.
 
 ## Configuration
 
-| Variable | Purpose | Local default |
+| Variable | Purpose | Default |
 | --- | --- | --- |
-| `LLM_PROVIDER_URL` | Responses-compatible provider base URL | Empty; uses fake provider locally |
-| `LLM_API_KEY` | Shared server-side credential for both semantic calls | Empty |
-| `LLM_MODEL` | Provider model ID used by both independent semantic calls | Empty; required with hosted provider |
-| `LLM_TURN_TIMEOUT_SECONDS` | Complete planner/reviewer iteration budget | `45` |
-| `MCP_SERVERS_JSON` | Optional JSON array of Streamable HTTP MCP server configurations | Empty |
-| `NORTHSTAR_API_KEY` | Protected dealership-operation key | Local development value |
-| `NORTHSTAR_BASE_URL` | Internal dealership API URL | `http://dealership-platform:4010` |
-| `WEBCHAT_PORT` | Host port exposing the webchat service | `4020` |
-| `WEBCHAT_DATABASE_PATH` | Conversation SQLite path | `/data/webchat.sqlite3` |
-| `WEBCHAT_COOKIE_SECURE` | Adds Secure to the chat cookie | `false` for local HTTP |
-| `WEBCHAT_ALLOWED_ORIGIN` | Accepted browser origin for writes | `http://localhost:4173` |
-| `WEBCHAT_RETENTION_DAYS` | Anonymous conversation retention | `30` |
-| `WEBCHAT_REQUESTS_PER_MINUTE` | Per-client webchat API request ceiling | `60` |
-| `WEBCHAT_DAILY_TURN_LIMIT` | Global UTC-day turn ceiling (`0` disables it) | `0` |
-| `WEBCHAT_MAX_CONCURRENT_TURNS` | Concurrent AI-backed turn ceiling | `8` |
-| `WEBCHAT_TRUST_PROXY_HEADERS` | Trust gateway-provided client addresses | `false` |
-| `LOG_LEVEL` | Structured server log level | `INFO` |
+| `LLM_PROVIDER_URL` | Responses-compatible provider base URL | required outside tests |
+| `LLM_API_KEY` | server-only provider credential | required outside tests |
+| `LLM_MODEL` | model used for turn resolution, planning, and composition | required outside tests |
+| `LLM_TURN_TIMEOUT_SECONDS` | complete AI/tool turn deadline | `45` |
+| `MCP_SERVERS_JSON` | optional read-only Streamable HTTP MCP servers | empty |
+| `NORTHSTAR_API_KEY` | server-only dealership operation key | local development value |
+| `NORTHSTAR_BASE_URL` | internal dealership API URL | `http://dealership-platform:4010` |
+| `WEBCHAT_PORT` | host port for the webchat service | `4020` |
+| `WEBCHAT_DATABASE_PATH` | SQLite path | `/data/webchat.sqlite3` |
+| `WEBCHAT_ALLOWED_ORIGIN` | browser origin accepted for writes | `http://localhost:4173` |
+| `WEBCHAT_COOKIE_SECURE` | add `Secure` to the session cookie | `false` locally |
+| `WEBCHAT_RETENTION_DAYS` | anonymous conversation retention | `30` |
+| `WEBCHAT_REQUESTS_PER_MINUTE` | per-client mutation limit; `0` disables it for local Docker | `0` locally; `30` in the public deployment |
+| `WEBCHAT_DAILY_TURN_LIMIT` | global daily AI-turn limit; `0` disables | `0` |
+| `WEBCHAT_MAX_CONCURRENT_TURNS` | concurrent AI turn limit | `8` |
+| `WEBCHAT_TRUST_PROXY_HEADERS` | trust gateway client-address headers | `false` |
+| `LOG_LEVEL` | structured log level | `INFO` |
 
-## Tests
+## Important decisions and known limitations
 
-Build and run the isolated webchat tests:
+- The core product requires no hosted dependency other than the configured LLM provider. Optional
+  MCP servers are disabled unless configured and only read-only tools are exposed.
+- Development and production require a working hosted-model configuration; the deterministic
+  provider is test-only.
+- Model context uses a bounded recent transcript and does not currently create a long-conversation
+  summary.
+- Protected form values are held in per-conversation `sessionStorage` until submission or tab
+  closure. Deploy only trusted same-origin scripts.
+
+## Focused verification
+
+```bash
+.venv/bin/ruff check webchat-service/webchat
+.venv/bin/pytest -q \
+  webchat-service/tests/unit/test_conversational_contracts.py \
+  webchat-service/tests/unit/test_hosted_llm.py \
+  webchat-service/tests/unit/test_workflow_state_and_policy.py \
+  webchat-service/tests/unit/test_routing_architecture.py \
+  webchat-service/tests/unit/test_service_resolution.py \
+  webchat-service/tests/unit/test_vehicle_reference_context.py
+node --test \
+  webchat-service/tests/browser/test_conversational_workflows.mjs \
+  webchat-service/tests/browser/test_read_only_cards.mjs \
+  webchat-service/tests/browser/test_widget_state.mjs
+docker compose config
+git diff --check
+```
+
+The test image preloads the local embedding model, so the complete Python suite can run without a
+model download at test time:
 
 ```bash
 docker build --target test -t northstar-webchat-test ./webchat-service
 docker run --rm northstar-webchat-test
 ```
 
-Run lint and all widget-module syntax checks as well:
+Configured-model browser suites require the running stack and valid hosted-provider credentials:
 
 ```bash
-docker run --rm northstar-webchat-test ruff check webchat tests
-for file in $(find webchat-service/webchat/widget -name '*.js'); do
-  node --check "$file" || exit 1
-done
-node --test webchat-service/tests/browser/*.mjs
+npm ci
+npx playwright install chromium
+npm run test:e2e
 ```
 
-Run the supplied dealership-platform tests:
+`npm run test:real-ai` and `npm run test:real-ai:stress` run the focused release and stress suites.
+Test discovery alone is not a passing result.
 
-```bash
-docker compose exec dealership-platform python -m unittest discover -s tests
-```
+## Project documentation
 
-Useful static checks:
-
-```bash
-docker compose config
-node --check dealership-website/src/app.js
-git diff --check
-```
-
-## Important boundaries
-
-- `dealership-platform/` is supplied and must not be changed.
-- The browser stores an opaque conversation ID, UI preference, and ordinary reusable form values;
-  authorization is an HttpOnly cookie and private booking lookup proof is explicitly excluded.
-- Platform facts and operation statuses are never guessed by the model.
-- Every write uses a persisted draft and explicit confirmation.
-- Creation retries reuse an idempotency key. Workshop amendment/cancellation retries are locally
-  deduplicated because those platform endpoints do not accept that header.
-- Operational logs exclude message bodies, contact details, booking proof, and credentials.
-
-## Reset
-
-```bash
-./reset.sh
-```
-
-Resetting clears dealership-platform records and restores the original seed data.
-
-## Stop
-
-```bash
-docker compose down
-```
-
-State is retained in the `northstar-platform-data` Docker volume until reset or removal.
-
-## Dealership services
-
-The dealership platform provides:
-
-- vehicle inventory and offers;
-- dealership locations and opening hours;
-- sales enquiries, callbacks, and test drives;
-- workshop availability and bookings;
-- dealership messages and part-exchange valuations.
-
-The customer website is editable and uses the same vehicle inventory API.
+- [Product brief](./PRODUCT-BRIEF.md)
+- [Integration guide](./docs/INTEGRATION-GUIDE.md)
+- [Business semantics](./docs/BUSINESS-SEMANTICS.md)
+- [Reviewed customer knowledge](./docs/CUSTOMER-KNOWLEDGE.md)
+- [Seeded scenarios](./docs/SEEDED-SCENARIOS.md)
+- [Webchat service guide](./webchat-service/README.md)
+- [Private demo deployment](./deployment/gcp/README.md)

@@ -6,8 +6,18 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from webchat.domain.conversation_state import ConversationState
+
 from ..database import Database
 from .common import token_hash, utc_now
+
+_OBSOLETE_STATE_KEYS = {
+    "searches",
+    "selectedEntities",
+    "pendingClarification",
+    "workflow",
+    "resumeOffer",
+}
 
 
 class ConversationRepository:
@@ -66,7 +76,7 @@ class ConversationRepository:
     def list_for_session(self, token: str) -> list[dict]:
         with self.database.connect() as connection:
             rows = connection.execute(
-                "SELECT c.id, c.created_at, c.updated_at, COUNT(m.id) AS message_count, "
+                "SELECT c.id, c.created_at, c.updated_at, c.state_json, COUNT(m.id) AS message_count, "
                 "COALESCE((SELECT text FROM messages first_message "
                 "WHERE first_message.conversation_id = c.id AND first_message.role = 'user' "
                 "ORDER BY first_message.sequence LIMIT 1), 'New conversation') AS title "
@@ -106,6 +116,14 @@ class ConversationRepository:
         return {"initial": initial, "current": current}
 
     def get_workflow_state(self, conversation_id: str) -> dict[str, object]:
+        try:
+            state = self.get_state(conversation_id)
+        except KeyError:
+            return {}
+        if state.agentWorkflow:
+            return dict(state.agentWorkflow)
+        # Read the pre-unification column only to upgrade an existing local database. Every
+        # subsequent write is made to the versioned authoritative state document.
         with self.database.connect() as connection:
             row = connection.execute(
                 "SELECT workflow_state_json FROM conversations WHERE id = ? AND status = 'active'",
@@ -116,19 +134,64 @@ class ConversationRepository:
         value = json.loads(row["workflow_state_json"])
         return value if isinstance(value, dict) else {}
 
+    def get_state(self, conversation_id: str) -> ConversationState:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT state_version, state_json FROM conversations "
+                "WHERE id = ? AND status = 'active'",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            raise KeyError("conversation not found")
+        raw = json.loads(row["state_json"] or "{}")
+        # Remove fields from the abandoned pre-unification state design when opening an existing
+        # local database. `agentWorkflow` and repository-owned records are the only authorities.
+        for key in _OBSOLETE_STATE_KEYS:
+            raw.pop(key, None)
+        raw.setdefault("schemaVersion", 1)
+        raw["stateVersion"] = int(row["state_version"])
+        return ConversationState.model_validate(raw)
+
     def update_workflow_state(
         self, conversation_id: str, workflow_state: dict[str, object]
     ) -> None:
         with self.database.transaction() as connection:
-            connection.execute(
-                "UPDATE conversations SET workflow_state_json = ?, updated_at = ? "
+            row = connection.execute(
+                "SELECT state_version, state_json FROM conversations "
                 "WHERE id = ? AND status = 'active'",
+                (conversation_id,),
+            ).fetchone()
+            if not row:
+                raise KeyError("conversation not found")
+            raw = json.loads(row["state_json"] or "{}")
+            for key in _OBSOLETE_STATE_KEYS:
+                raw.pop(key, None)
+            raw.setdefault("schemaVersion", 1)
+            raw["stateVersion"] = int(row["state_version"])
+            state = ConversationState.model_validate(raw)
+            next_state = ConversationState.model_validate(
+                state.model_copy(
+                    update={
+                        "agentWorkflow": dict(workflow_state),
+                        "stateVersion": state.stateVersion + 1,
+                    }
+                ).model_dump()
+            )
+            changed = connection.execute(
+                "UPDATE conversations SET state_version = ?, state_json = ?, "
+                "workflow_state_json = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'active' AND state_version = ?",
                 (
+                    next_state.stateVersion,
+                    next_state.model_dump_json(),
                     json.dumps(workflow_state, separators=(",", ":")),
                     utc_now(),
                     conversation_id,
+                    state.stateVersion,
                 ),
-            )
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("conversation state changed concurrently")
 
     def expire_old(self) -> int:
         with self.database.transaction() as connection:

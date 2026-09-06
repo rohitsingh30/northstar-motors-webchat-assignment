@@ -7,9 +7,18 @@ import json
 from fastapi import APIRouter, HTTPException, Request
 
 from webchat.integrations.dealership import DealershipError
+from webchat.orchestration.presentation.suggestions import (
+    workshop_booking_status_prompt,
+    workshop_booking_status_suggestions,
+)
 from webchat.orchestration.state import workflow_state
 
-from .dependencies import _authorize, _tool_view, _workshop_state
+from .dependencies import (
+    _authorize,
+    _persist_confirmation_interaction,
+    _tool_view,
+    _workshop_state,
+)
 from .models import (
     BookingLookupRequest,
     WorkshopAmendDraftRequest,
@@ -19,6 +28,42 @@ from .models import (
 )
 
 router = APIRouter()
+
+
+def _booking_status_response(booking: dict) -> dict:
+    suggestions = workshop_booking_status_suggestions(booking.get("status"))
+    prompt = workshop_booking_status_prompt(booking.get("status"))
+    if not suggestions or not prompt:
+        return {
+            "text": (
+                "Your workshop booking has been verified. "
+                "What would you like help with next?"
+            ),
+            "viewType": "workshop_booking_details",
+            "view": {"version": 1, **booking},
+        }
+    return {
+        "text": f"Your workshop booking has been verified. {prompt}",
+        "viewType": "grounded_presentation",
+        "view": {
+            "version": 1,
+            "cards": [
+                {
+                    "reference": "card:verified-workshop-booking:details",
+                    "type": "booking",
+                    "data": {"version": 1, **booking},
+                }
+            ],
+            "quickReplies": [
+                {
+                    "label": suggestion["label"],
+                    "message": suggestion["text"],
+                }
+                for suggestion in suggestions
+            ],
+        },
+    }
+
 
 async def _prepare_existing_workshop_action(
     request: Request, conversation_id: str, mode: str
@@ -40,6 +85,7 @@ async def _prepare_existing_workshop_action(
             },
         ),
     )
+    _persist_confirmation_interaction(request, conversation_id, result)
     return {
         "text": result.text,
         "viewType": result.view_type,
@@ -145,6 +191,7 @@ async def prepare_workshop_amendment_draft(
         summary["newDealership"] = selected_slot.get("dealershipName") or selected_slot.get(
             "dealershipTown"
         )
+    _persist_confirmation_interaction(request, conversation_id, result)
     return {"viewType": result.view_type, "view": result.view_payload}
 
 
@@ -172,13 +219,40 @@ async def lookup_booking(
         conversation_id,
         _workshop_state("existing_workshop_booking", "verified", booking),
     )
-    if body.mode in {"amend", "cancel"}:
+    if body.mode == "cancel":
         return await _prepare_existing_workshop_action(request, conversation_id, body.mode)
-    return {
-        "text": "Your workshop booking has been verified.",
-        "viewType": "workshop_booking_details",
-        "view": {"version": 1, **booking},
-    }
+    if body.mode == "amend":
+        response = {
+            "text": (
+                "Your workshop booking has been verified. What would you like to change?\n"
+                "- Appointment\n"
+                "- Mileage\n"
+                "- Notes"
+            ),
+            "viewType": "workshop_booking_details",
+            "view": {"version": 1, **booking},
+        }
+        request.app.state.messages.add(
+            conversation_id,
+            "assistant",
+            response["text"],
+            None,
+            response["viewType"],
+            json.dumps(response["view"], separators=(",", ":")),
+            purpose="workflow_prompt",
+        )
+        return response
+    response = _booking_status_response(booking)
+    request.app.state.messages.add(
+        conversation_id,
+        "assistant",
+        response["text"],
+        None,
+        response["viewType"],
+        json.dumps(response["view"], separators=(",", ":")),
+        purpose="follow_up",
+    )
+    return response
 
 
 @router.post("/conversations/{conversation_id}/workshop-existing-action")

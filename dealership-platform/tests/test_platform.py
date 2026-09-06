@@ -8,7 +8,6 @@ from src.application import DealershipPlatform
 from src.database import Database
 from src.errors import ApiError
 
-
 CONTACT = {
     "firstName": "Jamie",
     "lastName": "Taylor",
@@ -48,6 +47,40 @@ class PlatformTestCase(unittest.TestCase):
         self.assertEqual(self.platform.get_vehicle("veh-007")["availability"], "reserved")
         self.assertIsNone(self.platform.get_vehicle("veh-019")["pricePence"])
         self.assertTrue(workshop_slots[0]["dealershipTown"])
+
+    def test_inventory_enforces_exclusions_and_bidirectional_ranges(self) -> None:
+        result = self.platform.list_vehicles(
+            {
+                "excludedMakes": ["bmw", "Land Rover"],
+                "minMileage": "20000",
+                "maxYear": "2024",
+                "sort": "mileageDesc",
+                "pageSize": "50",
+            }
+        )
+
+        items = result["items"]
+        self.assertTrue(items)
+        self.assertTrue(all(item["make"].casefold() not in {"bmw", "land rover"} for item in items))
+        self.assertTrue(all(item["mileage"] >= 20000 for item in items))
+        self.assertTrue(all(item["year"] <= 2024 for item in items))
+        self.assertEqual(
+            [item["mileage"] for item in items],
+            sorted((item["mileage"] for item in items), reverse=True),
+        )
+
+    def test_inventory_accepts_multiple_positive_vehicle_filters(self) -> None:
+        result = self.platform.list_vehicles(
+            {
+                "makes": ["BMW", "Volvo"],
+                "availability": "available",
+                "pageSize": "50",
+            }
+        )
+
+        items = result["items"]
+        self.assertTrue(items)
+        self.assertEqual({item["make"] for item in items}, {"BMW", "Volvo"})
 
     def test_sales_enquiry_is_saved_as_received(self) -> None:
         enquiry = self.platform.create_sales_enquiry(

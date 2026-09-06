@@ -2,8 +2,14 @@
 __pycache__/
 *.pyc
 *.sqlite3
+*.ses
+*.egg-info/
 .env
 .env.*
 !.env.example
 dealership-platform/data/
 webchat-service/data/
+.venv/
+node_modules/
+playwright-report/
+test-results/

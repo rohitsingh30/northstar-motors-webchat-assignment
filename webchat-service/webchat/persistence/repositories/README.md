@@ -1,15 +1,15 @@
 # Repository aggregates
 
-`webchat.persistence.repositories` is the stable import facade. Implementations are grouped by the
-state they own:
+`webchat.persistence.repositories` is the stable facade. Implementations own SQL and return domain
+or repository contracts rather than raw rows.
 
 | File | Responsibility |
 | --- | --- |
-| `conversations.py` | Session identity, conversation lifecycle, page context, workflow state |
-| `messages.py` | Ordered transcript messages and closed view replacement |
-| `turns.py` | Idempotent turn execution state |
-| `workflows.py` | Drafts, operation attempts, receipts, and verified booking grants |
-| `common.py` | UTC timestamp and session-token hashing primitives |
-
-Repository modules own SQL. API, orchestration, integration, and widget code consume repository
-methods and never depend on raw tables.
+| `conversations.py` | session identity, lifecycle, context, versioned conversation/capability state |
+| `messages.py` | transcript messages, structured segments/views, receipts |
+| `turns.py` | turn idempotency and running/completed/failed state |
+| `turn_commit.py` | atomic turn completion plus protected prompt/interaction/state transitions |
+| `result_sets.py` | internal append-only writes for trusted normalized result envelopes |
+| `interactions.py` | persisted protected interactions and supersession |
+| `workflows.py` | drafts, operation attempts, receipts, verification grants |
+| `common.py` | timestamps and session-token hashing |

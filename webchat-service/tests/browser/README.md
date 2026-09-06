@@ -1,29 +1,24 @@
 # Browser-module tests
 
-These lightweight Node tests verify isolated ES-module behavior without requiring a full browser
-automation dependency.
-
-## Files
+These Node ES-module tests verify widget utilities/renderers without a running browser or Compose.
 
 | File | Coverage |
 | --- | --- |
-| [`test_business_information_card.mjs`](./test_business_information_card.mjs) | Scoped fact-only business cards and restored version 1 payload compatibility |
-| [`test_confirmation_card.mjs`](./test_confirmation_card.mjs) | Sales-enquiry confirmation copy, safe display summary, and confirm/cancel action data |
-| [`test_form_profile.mjs`](./test_form_profile.mjs) | Ordinary form values persist/prefill while private booking lookup proof is excluded |
-| [`test_offer_card.mjs`](./test_offer_card.mjs) | Offer actions, inline enquiry Cancel control, and open/collapsed Send/View enquiry state transitions |
-| [`test_opening_hours_card.mjs`](./test_opening_hours_card.mjs) | Holiday-only opening-hours cards without unrelated weekday schedules |
-| [`test_progress_indicator.mjs`](./test_progress_indicator.mjs) | Honest indeterminate request progress without fabricated percentages |
-| [`test_recovery.mjs`](./test_recovery.mjs) | Slot/vehicle/field recovery classification and definitive versus indeterminate turn retries |
-| [`test_scroll_isolation.mjs`](./test_scroll_isolation.mjs) | Transcript-only automatic scrolling, contained scroll momentum, and no host-page reflow |
-| [`test_suggestions.mjs`](./test_suggestions.mjs) | Two-or-four follow-up rendering, complete service choices, active filters, and typed actions |
-| [`test_test_drive_toggle.mjs`](./test_test_drive_toggle.mjs) | Booked test-drive disclosure labelling, controls, and expanded/collapsed toggle states |
-| [`test_workshop_booking_card.mjs`](./test_workshop_booking_card.mjs) | Confirmed workshop booking hierarchy, structured details, and retained actions |
+| `test_conversational_workflows.mjs` | protected-only collector, session isolation, public-routing invariants |
+| `test_read_only_cards.mjs` | no anchors/buttons/forms/embedded actions in cards |
+| `test_widget_state.mjs` | explicit lifecycle transitions |
+| `test_business_information_card.mjs` | scoped fact views and compatibility payloads |
+| `test_opening_hours_card.mjs` | regular/holiday hours rendering |
+| `test_suggestions.mjs` | external quick replies and trusted typed actions |
+| `test_progress_indicator.mjs` | honest indeterminate request progress |
+| `test_recovery.mjs` | retry/failure classification |
+| `test_scroll_isolation.mjs` | transcript scrolling without host-page movement |
+| `test_workshop_booking_confirmation.mjs` | workshop review labels, local time, and hidden operational selectors |
 
-Run from the repository root:
+Run all module tests with:
 
 ```bash
 node --test webchat-service/tests/browser/*.mjs
 ```
 
-These tests complement, but do not replace, manual accessibility, layout, and end-to-end browser
-journey verification.
+They do not replace live-provider or real-browser release acceptance.

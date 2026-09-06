@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from webchat.api import models as api_models
 from webchat.api.models import (
     CallbackDraftRequest,
     DealershipMessageDraftRequest,
@@ -10,7 +11,6 @@ from webchat.api.models import (
     VehicleInterestDraftRequest,
     WorkshopDraftRequest,
 )
-from webchat.api.models import TestDriveDraftRequest as TestDriveRequestModel
 from webchat.config import Settings
 from webchat.orchestration.catalogue import UnifiedToolCatalog
 from webchat.orchestration.catalogue.mcp import McpServerConfig, McpToolSource
@@ -22,6 +22,22 @@ class NeverExecute:
         raise AssertionError
 
 
+class ReplacementExecutor:
+    def __init__(self) -> None:
+        self.replacement_draft_id = None
+
+    async def execute(
+        self,
+        name,
+        arguments,
+        conversation_id=None,
+        *,
+        replacement_draft_id=None,
+    ):
+        self.replacement_draft_id = replacement_draft_id
+        return {"name": name, "arguments": arguments, "conversationId": conversation_id}
+
+
 @pytest.mark.parametrize(
     "request_model",
     [
@@ -29,13 +45,13 @@ class NeverExecute:
         DealershipMessageDraftRequest,
         PartExchangeDraftRequest,
         SalesEnquiryDraftRequest,
-        TestDriveRequestModel,
+        api_models.TestDriveDraftRequest,
         VehicleInterestDraftRequest,
         WorkshopDraftRequest,
     ],
 )
 def test_http_workflow_fields_are_accepted_by_the_catalogue(request_model) -> None:
-    """The HTTP form contract must never outgrow the internal draft contract."""
+    """The protected HTTP contract must never outgrow the internal draft contract."""
     assert set(request_model.model_fields) <= set(WorkflowDraftInput.model_fields)
 
 
@@ -45,6 +61,21 @@ def test_callback_preferred_time_is_a_workflow_field_not_workshop_runtime_contex
     assert definition.validate_arguments({"preferredTime": "Weekday afternoon"}) == {
         "preferredTime": "Weekday afternoon"
     }
+
+
+@pytest.mark.asyncio
+async def test_catalogue_forwards_draft_replacement_as_execution_metadata() -> None:
+    executor = ReplacementExecutor()
+    catalogue = UnifiedToolCatalog(executor)
+
+    await catalogue.execute(
+        "prepare_workshop_booking",
+        {},
+        "conversation-1",
+        replacement_draft_id="draft-under-review",
+    )
+
+    assert executor.replacement_draft_id == "draft-under-review"
 
 
 @pytest.mark.asyncio

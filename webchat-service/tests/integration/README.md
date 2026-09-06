@@ -1,15 +1,13 @@
 # Integration tests
 
-Integration tests assemble the FastAPI application with temporary SQLite and injected provider or
-mock platform boundaries. They verify behavior across modules.
-
-## Files
+Integration tests assemble FastAPI with temporary SQLite and injected provider/platform boundaries.
 
 | File | Coverage |
 | --- | --- |
-| [`test_conversations_api.py`](./test_conversations_api.py) | Conversation/session lifecycle, restoration, page snapshots, reviewed semantic corrections/clarifications, business-fact answerability, typed actions, forms, validation, verified workshop flows |
-| [`test_security.py`](./test_security.py) | Same-origin JSON enforcement and credentialed CORS |
-| [`test_structured_flow_contracts.py`](./test_structured_flow_contracts.py) | Direct tool contracts, renderable termination, and offline/hosted boundary invariants |
+| `test_conversations_api.py` | sessions, turns, restoration, provider/tool/state/action/workflow boundaries |
+| `test_security.py` | same-origin JSON, credentials, redaction, protected-input boundaries |
+| `test_structured_flow_contracts.py` | normalized results, grounded output, public/protected capability contracts |
 
-Add an integration test when a change crosses an API, repository, workflow, orchestration, or
-browser payload boundary. Use public response contracts and verify sensitive fields are absent.
+Use an integration test when behavior crosses an API, repository, workflow, orchestration, or
+browser payload boundary. External services must be mocked/injected; sensitive fields must be
+asserted absent from public persistence and AI-facing input.

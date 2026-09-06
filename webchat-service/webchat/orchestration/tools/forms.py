@@ -1,10 +1,11 @@
-"""Application-owned form and estimate tools."""
+"""Application-owned protected-input activation and estimate tools."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
+from webchat.domain.field_guidance import field_prompt, input_guidance
 from webchat.orchestration.tools.inputs import (
     BookingLookupForm,
     PartExchangeEstimate,
@@ -20,8 +21,8 @@ class EstimateGateway(Protocol):
 ToolMethod = Callable[[dict[str, Any]], Awaitable[ToolResult]]
 
 
-class FormToolHandler:
-    """Own application forms and the deterministic valuation request."""
+class CollectorToolHandler:
+    """Activate protected input and execute the deterministic valuation request."""
 
     def __init__(self, dealership: EstimateGateway):
         self.dealership = dealership
@@ -37,23 +38,49 @@ class FormToolHandler:
     async def _booking_lookup(self, arguments: dict[str, Any]) -> ToolResult:
         request = BookingLookupForm.model_validate(arguments)
         descriptions = {
-            "lookup": "Enter all four booking details to view the appointment securely.",
-            "amend": "Enter all four booking details to continue directly to the change form.",
-            "cancel": "Enter all four booking details to review the cancellation securely.",
+            "lookup": f"I can check that securely. {field_prompt('reference')}",
+            "amend": f"I can help update that securely. {field_prompt('reference')}",
+            "cancel": f"I can review that securely. {field_prompt('reference')}",
         }
         return ToolResult(
             descriptions[request.mode],
             "private_booking_lookup",
-            {"version": 1, "mode": request.mode},
+            {
+                "version": 1,
+                "kind": "booking_lookup",
+                "mode": request.mode,
+                "secureFields": ["reference", "lastName", "registration", "phone"],
+                "secureInputReady": True,
+                "inputGuidance": input_guidance(
+                    ["reference", "lastName", "registration", "phone"]
+                ),
+            },
             {"lookupFormRequested": True, "mode": request.mode},
         )
 
     async def _part_exchange_form(self, arguments: dict[str, Any]) -> ToolResult:
         known = PartExchangeEstimateForm.model_validate(arguments).model_dump(exclude_none=True)
         return ToolResult(
-            "Enter the remaining vehicle details in the form below.",
+            f"I can help with that estimate. {field_prompt('registration')}",
             "part_exchange_estimate_form",
-            {"version": 1, "values": known},
+            {
+                "version": 1,
+                "kind": "part_exchange_estimate",
+                "values": known,
+                "secureFields": [
+                    field
+                    for field in ("registration", "mileage", "condition")
+                    if field not in known
+                ],
+                "secureInputReady": True,
+                "inputGuidance": input_guidance(
+                    [
+                        field
+                        for field in ("registration", "mileage", "condition")
+                        if field not in known
+                    ]
+                ),
+            },
             {"estimateFormRequested": True, "values": known},
         )
 

@@ -1,10 +1,26 @@
 // This module owns the complete browser widget; host applications only load embed.js.
-import { setPageContext } from "./core/context.js";
-import { createWebchat } from "./webchat.js";
+import { setPageContext } from "./core/context.js?v=20260904.2";
+import { createWebchat } from "./webchat.js?v=20260906.10";
+
+const HOST_STYLE_ID = "northstar-chat-host-style";
+
+function installHostStyle() {
+  if (document.getElementById(HOST_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = HOST_STYLE_ID;
+  style.textContent = `
+    @media (min-width: 800px) {
+      html[data-northstar-chat-open] body {
+        margin-right: 350px;
+      }
+    }
+  `;
+  document.head.append(style);
+}
 
 const template = document.createElement("template");
 template.innerHTML = `
-  <link rel="stylesheet" href="${new URL("./webchat.css", import.meta.url).href}" />
+  <link rel="stylesheet" href="${new URL("./webchat.css?v=20260906.2", import.meta.url).href}" />
   <button id="webchat-launcher" class="webchat-launcher" type="button"
     aria-haspopup="dialog" aria-controls="webchat-panel">
     <span>Chat with Northstar</span>
@@ -14,7 +30,7 @@ template.innerHTML = `
     <div class="webchat-layout">
       <header class="webchat-header">
         <div>
-          <p class="eyebrow">Northstar assistant</p>
+          <p class="eyebrow">Northstar assistant <span id="webchat-mode" hidden></span></p>
           <h2 id="webchat-title">How can we help?</h2>
         </div>
         <div class="webchat-header-actions">
@@ -41,6 +57,7 @@ template.innerHTML = `
       </div>
       <form id="webchat-form" class="webchat-form">
         <label for="webchat-input">Your message</label>
+        <p id="webchat-privacy-helper" class="webchat-composer-helper" hidden></p>
         <div id="webchat-starter-suggestions" class="webchat-suggestions webchat-starter-suggestions"
           aria-label="Suggested questions" hidden></div>
         <div class="webchat-form-input">
@@ -56,11 +73,25 @@ template.innerHTML = `
 export class NorthstarChatWidget extends HTMLElement {
   connectedCallback() {
     if (this.controller) return;
+    installHostStyle();
     const root = this.attachShadow({ mode: "open" });
     root.append(template.content.cloneNode(true));
     this.controller = createWebchat(root, {
       apiBase: this.getAttribute("api-base") || undefined,
+      onOpen: () => document.documentElement.setAttribute("data-northstar-chat-open", ""),
+      onClose: () => document.documentElement.removeAttribute("data-northstar-chat-open"),
     });
+    this.updateVisualViewport = () => {
+      const height = window.visualViewport?.height || window.innerHeight;
+      this.style.setProperty("--webchat-visual-height", `${Math.round(height)}px`);
+    };
+    this.updateVisualViewport();
+    window.visualViewport?.addEventListener("resize", this.updateVisualViewport);
+  }
+
+  disconnectedCallback() {
+    window.visualViewport?.removeEventListener("resize", this.updateVisualViewport);
+    document.documentElement.removeAttribute("data-northstar-chat-open");
   }
 
   open() {
@@ -77,6 +108,10 @@ export class NorthstarChatWidget extends HTMLElement {
 
   setContext(context = {}) {
     setPageContext(context);
+  }
+
+  handleHostLifecycle(type, detail = {}) {
+    return this.controller?.handleHostLifecycle(type, detail);
   }
 }
 

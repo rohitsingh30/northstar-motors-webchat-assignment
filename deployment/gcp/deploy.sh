@@ -5,12 +5,12 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_ID="${GCP_PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${GCP_REGION:-asia-south1}"
 ZONE="${GCP_ZONE:-${REGION}-a}"
-INSTANCE_NAME="${GCP_INSTANCE_NAME:-northstar-review}"
+INSTANCE_NAME="${GCP_INSTANCE_NAME:-northstar-conversational-webchat}"
 MACHINE_TYPE="${GCP_MACHINE_TYPE:-e2-medium}"
 SECRET_NAME="${LLM_SECRET_NAME:-northstar-review-llm-api-key}"
 TUNNEL_MODE="${NORTHSTAR_TUNNEL_MODE:-named}"
 TUNNEL_SECRET_NAME="${CLOUDFLARE_TUNNEL_SECRET_NAME:-northstar-cloudflare-tunnel-token}"
-SERVICE_ACCOUNT_ID="${GCP_SERVICE_ACCOUNT_ID:-northstar-review-vm}"
+SERVICE_ACCOUNT_ID="${GCP_SERVICE_ACCOUNT_ID:-northstar-webchat-vm}"
 
 for command in gcloud docker tar; do
   command -v "${command}" >/dev/null || { echo "${command} is required." >&2; exit 1; }

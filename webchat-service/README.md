@@ -1,18 +1,39 @@
 # Northstar webchat service
 
-`webchat-service` is the server-side policy, persistence, AI orchestration, workflow, and widget
-boundary for Northstar Motors. It serves the browser widget and `/api/chat/v1`, calls the supplied
-dealership API, and stores webchat-owned state in SQLite.
+This FastAPI service owns the conversational AI boundary, deterministic tool policy, grounding,
+webchat state, protected workflows, and the browser widget. The supplied dealership API remains
+the authoritative source for inventory, dealerships, workshop data, offers, and confirmed writes.
 
-## Architecture at a glance
+## Production turn architecture
 
-In hosted mode, semantic retrieval selects relevant definitions from one unified application/MCP
-tool catalogue plus documented knowledge. A user-supplied Responses-compatible provider proposes
-concrete calls, and a separate stateless request accepts, corrects, clarifies, or rejects the
-proposal. Both requests share the configured key and model; independence means separate requests,
-prompts, schemas, and context. Only reviewed calls cross deterministic policy. Application code
-validates references and arguments, performs reads, prepares drafts, and requires explicit
-confirmation before any protected mutation.
+```text
+message -> hosted AI TurnUnderstanding -> semantic validation + legal-affordance preflight
+        -> hosted AI capability plan -> deterministic policy -> Northstar tools
+        -> normalized facts + response obligations -> hosted AI composition
+        -> deterministic trust grounding + trusted views -> atomic turn commit -> widget
+```
+
+The same configured provider/model owns three bounded phases: semantic turn resolution, capability
+planning, and grounded response composition. The planner must select tools compatible with the
+already validated turn meaning. It may choose reads and draft-preparation tools. It cannot perform a confirmed mutation,
+inject protected customer data, or invent an executable URL. Provider-facing schemas expose only
+public fields; policy resolves trusted entity and appointment metadata before runtime validation.
+
+The same configured provider/model composes the final response from fact references returned by
+the tools. Grounding resolves those references into safe text/link segments. It hard-fails only
+trust-boundary violations such as invented business values, private data, stale references,
+untrusted destinations, or invalid protected actions. Conversational quality requirements guide
+composition and evaluation; they never discard a successful dealership result. Trusted cards and
+collections are attached deterministically. Interactive choice and clarification collections own
+their item presentation: duplicate AI item blocks are pruned across the turn and the collection is
+attached once to its question. Informational collections may instead use one complete AI-rendered
+list. There is no independent AI reviewer in the production path and no deterministic public
+keyword router for business capabilities. Latest-only protected decisions and immediate approved
+vehicle-hazard guidance remain deliberately narrow deterministic safety boundaries.
+
+Policy never emits transcript prose. Typed public choices and clarifications are AI-owned; a failed
+precondition returns a bounded reason to planning. Trusted chips can carry typed actions, but their
+tool results still pass through AI composition and grounding.
 
 ## Run locally
 
@@ -20,92 +41,75 @@ From the repository root:
 
 ```bash
 cp .env.example .env
+# Set LLM_PROVIDER_URL, LLM_API_KEY, and LLM_MODEL.
 docker compose up --build -d
 ```
 
-Open `http://localhost:4173`. With no hosted-provider credentials, non-production environments use
-the deterministic fake LLM provider.
+Open `http://localhost:4173`. Runtime services use ports `4010` (dealership), `4020` (webchat), and
+`4173` (website). Development and production fail startup when the hosted provider configuration
+is absent or incomplete. The fake provider is available only when `ENVIRONMENT=test`; a hosted
+failure never falls back to it.
 
-Optional read-only MCP servers join the same catalogue. Configure a JSON array; headers remain
-server-side:
+Optional MCP configuration is read-only:
 
 ```dotenv
 MCP_SERVERS_JSON=[{"name":"crm","url":"https://mcp.example/tools","headers":{"Authorization":"Bearer ..."}}]
 ```
 
-Only remote tools that advertise the MCP read-only annotation are model-visible. Remote mutations
-remain disabled until they have an application-owned confirmation workflow.
+Only MCP tools explicitly annotated read-only are planner-visible.
 
-## Verify
+## State, privacy, and writes
+
+- SQLite `state_json` stores versioned public conversation state; `agentWorkflow` owns capability
+  continuation/interruptions/pauses, `dialogue.activeQuestion` owns ordinary questions, and sibling
+  `latestResultSets`, `agenda`, and `pendingInteraction` members own trusted result references,
+  turn progress, and the latest protected action.
+- Normal successful turns use one optimistic compare-and-swap transaction for assistant messages,
+  normalized result sets, dialogue/workflow state, any interaction transition, and turn completion.
+- Private workflow answers remain in per-conversation `sessionStorage` until one strict protected
+  endpoint receives the completed group. They do not enter `/turns`, AI context, transcript, or logs.
+- Same-origin JavaScript can read session storage; deploy only trusted scripts on the widget origin.
+- Confirmation/cancellation and vehicle navigation are protected, latest-interaction-only,
+  deterministic boundaries with atomic state transitions and idempotent server execution.
+- Normal responses require hosted composition. After an idempotent write has already succeeded,
+  composer failure falls back only to the deterministic public receipt so success is not misreported.
+- Card payloads are visual-only. Vehicle preview cards add one application-owned “View vehicle”
+  control that derives a same-site modal target from the trusted vehicle ID; conversational choices
+  and workflow actions remain in chips outside cards.
+- Broad appointment results stay hidden as trusted context until the AI has a day/date and
+  approximate time; one selected slot may then be shown as a read-only summary.
+
+## Focused verification
 
 ```bash
-docker build --target test -t northstar-webchat-test:refactor ./webchat-service
-docker run --rm northstar-webchat-test:refactor
-docker run --rm northstar-webchat-test:refactor ruff check webchat tests
+.venv/bin/ruff check webchat-service/webchat
+PYTHONPYCACHEPREFIX=/tmp/northstar-pycache python3 -m compileall -q webchat-service/webchat
+node --test \
+  webchat-service/tests/browser/test_conversational_workflows.mjs \
+  webchat-service/tests/browser/test_read_only_cards.mjs \
+  webchat-service/tests/browser/test_widget_state.mjs
 ```
 
-Also run JavaScript syntax checks after widget changes:
+Run the complete deterministic suite with the repository test image:
 
 ```bash
-for file in $(find webchat-service/webchat/widget -name '*.js'); do
-  node --check "$file" || exit 1
-done
-node --test webchat-service/tests/browser/*.mjs
+docker build --target test -t northstar-webchat-test ./webchat-service
+docker run --rm northstar-webchat-test
 ```
 
-## Top-level files and folders
+Configured-model browser suites require the running Compose stack and valid provider credentials;
+test discovery is not a passing result.
 
-| Path | Purpose |
+## Ownership
+
+| Path | Responsibility |
 | --- | --- |
-| [`Dockerfile`](./Dockerfile) | Cached dependency/model stage plus isolated test and runtime images; ordinary source changes do not reinstall native AI dependencies |
-| [`pyproject.toml`](./pyproject.toml) | Package metadata, runtime/dev dependencies, nested widget assets, Pytest/Ruff settings |
-| [`scripts/`](./scripts/README.md) | Repeatable generation of the packaged document knowledge index |
-| [`webchat/`](./webchat/README.md) | Runtime Python package plus service-hosted widget |
-| [`tests/`](./tests/README.md) | Unit, integration, contract, security, and health verification |
-
-## Runtime boundaries
-
-- Browser code never receives the dealership or AI API keys.
-- Dynamic business facts come from `DealershipClient` calls.
-- Specific business-information questions render only relevant platform facts; unsupported facts
-  fail closed with a dealership-contact offer instead of a generic notice card.
-- The model cannot confirm a write or choose an arbitrary HTTP endpoint.
-- Hosted plans cannot reach a business tool without an independent review result.
-- The compulsory reviewer shares the configured provider, key, and model but has a separate prompt,
-  schema, request, and context; it receives no planner history or hidden reasoning.
-- The reviewer selects one outcome-specific accept/correct/clarify/reject function. Invalid output
-  receives one deterministic repair attempt; repeated failure becomes retryable
-  `LLM_REVIEW_FAILED`, not a completed customer answer.
-- Workflow contact details are stored server-side in a validated draft and hidden from confirmation
-  summaries.
-- Workshop lookup proof bypasses model/transcript storage and is excluded from saved browser forms.
-- `dealership-platform` is an external authoritative dependency and must not be edited as part of
-  webchat maintenance.
-
-## Detailed design
-
-- [Integration guide](../docs/INTEGRATION-GUIDE.md)
-- [Business semantics](../docs/BUSINESS-SEMANTICS.md)
-- [Seeded scenarios](../docs/SEEDED-SCENARIOS.md)
-
-## Where changes belong
-
-| Change | Owner |
-| --- | --- |
-| HTTP route or browser request schema | `webchat/api` |
-| Workflow fields, confirmation, or receipts | `webchat/domain` and `webchat/persistence` |
-| Hosted provider HTTP lifecycle | `webchat/integrations/hosted_llm/provider.py` |
-| Hosted proposal/reviewer protocols | `webchat/integrations/hosted_llm/protocol.py` and `review.py` |
-| Offline-only deterministic language routing | `webchat/integrations/fake_llm/routing` |
-| Unified local/MCP tool metadata and dispatch | `webchat/orchestration/catalogue` |
-| Semantic tool and knowledge retrieval | `webchat/orchestration/retrieval` |
-| Proposal/reviewer prompts and review schema | `webchat/orchestration/planning` |
-| Concrete-call safety and reference grounding | `webchat/orchestration/policy.py` |
-| Execution-derived follow-up state | `webchat/orchestration/state.py` |
-| Dealership read presentation | `webchat/orchestration/tools` |
-| Final response/suggestions | `webchat/orchestration/presentation` |
-| Widget transport/context utilities | `webchat/widget/core` |
-| Widget cards/forms | `webchat/widget/views` |
-
-Keep module dependencies pointed inward through contracts; wire concrete implementations only in
-`webchat/main.py`.
+| `webchat/api` | HTTP authorization, strict public/protected contracts, restoration |
+| `webchat/domain` | capabilities, state contracts, protected interactions, workflow writes |
+| `webchat/integrations/hosted_llm` | provider transport plus turn-resolution, planning, and grounded-composition protocols |
+| `webchat/orchestration` | context, policy, tools, state reduction, fact normalization, grounding |
+| `webchat/persistence` | migrations and repositories for durable webchat state |
+| `webchat/widget` | render/controller shell and protected input capture |
+| `tests` | focused policy, integration, module, security, and acceptance coverage |
+| `pyproject.toml` | package metadata, runtime/test dependencies, and Ruff/Pytest configuration |
+| `Dockerfile` | production image and embedding-preloaded deterministic test target |

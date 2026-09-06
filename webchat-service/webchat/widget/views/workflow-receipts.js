@@ -1,11 +1,10 @@
-import { textElement } from "../core/dom.js";
-import { moneyFromPence } from "../core/format.js";
+import { textElement } from "../core/dom.js?v=20260904.2";
+import { moneyFromPence } from "../core/format.js?v=20260904.2";
 import {
   confirmedBookingDisclosure,
   formatAppointment,
-  workshopBookingActions,
-} from "./appointments.js";
-import { factCard } from "./information-cards.js";
+} from "./appointments.js?v=20260904.2";
+import { factCard } from "./information-cards.js?v=20260904.2";
 
 // Receipts and private lookup views restore only public, application-approved workflow data.
 
@@ -41,9 +40,6 @@ export function receiptCard(view) {
       ["Vehicle", view.vehicleLabel || view.registration],
       ["Service", view.serviceName || view.serviceTypeName],
     ], "webchat-receipt-card");
-    if (["workshop_booking", "workshop_amend"].includes(view.kind)) {
-      card.append(workshopBookingActions(view.reference));
-    }
     card.receiptView = { ...view };
     return card;
   }
@@ -136,65 +132,10 @@ export function businessInformationCard(view) {
   return card;
 }
 
-export function privateLookupForm(view = {}) {
-  const mode = ["amend", "cancel"].includes(view.mode) ? view.mode : "lookup";
-  const form = document.createElement("form");
-  form.className = "webchat-private-lookup";
-  form.dataset.privateLookup = "true";
-  const title = mode === "amend"
-    ? "Verify the booking you want to change"
-    : mode === "cancel"
-      ? "Verify the booking you want to cancel"
-      : "Find an existing workshop booking";
-  const description = mode === "amend"
-    ? "After verification, you can update the appointment time, mileage, or notes."
-    : mode === "cancel"
-      ? "After verification, you can review and confirm the cancellation."
-      : "After verification, the appointment details and current status will be shown.";
-  form.append(
-    textElement("strong", "", title),
-    textElement("p", "", description),
-    textElement("small", "webchat-privacy-note", "These details go directly to the secure lookup and are not added to the chat transcript."),
-  );
-  const modeInput = document.createElement("input");
-  modeInput.type = "hidden";
-  modeInput.name = "mode";
-  modeInput.value = mode;
-  form.append(modeInput);
-  const fields = document.createElement("div");
-  fields.className = "webchat-details-grid webchat-private-lookup-fields";
-  [
-    ["reference", "Booking reference", "e.g. WORK-10001"],
-    ["lastName", "Surname", "The surname used when booking"],
-    ["registration", "Vehicle registration", "e.g. AB19 XYZ"],
-    ["phone", "Phone number", "The number used when booking"],
-  ].forEach(([name, labelText, placeholder]) => {
-    const label = textElement("label", "", labelText);
-    const input = document.createElement("input");
-    input.name = name;
-    input.required = true;
-    input.autocomplete = name === "phone" ? "tel" : "off";
-    input.placeholder = placeholder;
-    const error = textElement("small", "webchat-field-error", "");
-    error.dataset.fieldError = name;
-    error.hidden = true;
-    label.append(input, error);
-    fields.append(label);
-  });
-  form.append(fields);
-  const formError = textElement("small", "webchat-form-error", "");
-  formError.dataset.formError = "true";
-  formError.hidden = true;
-  const submit = textElement("button", "", "Look up booking");
-  submit.type = "submit";
-  form.append(formError, submit);
-  return form;
-}
-
 export function workshopBookingDetailsCard(view) {
-  const card = document.createElement("details");
+  const card = document.createElement("article");
   card.className = "webchat-card webchat-workshop-booking-card";
-  const heading = document.createElement("summary");
+  const heading = document.createElement("header");
   heading.className = "webchat-booking-confirmed-heading";
   const headingCopy = document.createElement("div");
   headingCopy.append(
@@ -210,14 +151,7 @@ export function workshopBookingDetailsCard(view) {
   }
   const mark = textElement("span", "webchat-receipt-mark", "✓");
   mark.setAttribute("aria-hidden", "true");
-  const toggle = document.createElement("span");
-  toggle.className = "webchat-booking-disclosure-toggle";
-  toggle.append(
-    textElement("span", "webchat-booking-disclosure-toggle-label", "Details"),
-    textElement("span", "webchat-booking-disclosure-chevron", ""),
-  );
-  toggle.setAttribute("aria-hidden", "true");
-  heading.append(mark, headingCopy, toggle);
+  heading.append(mark, headingCopy);
   card.append(heading);
 
   const details = document.createElement("dl");
@@ -232,9 +166,6 @@ export function workshopBookingDetailsCard(view) {
   appendDetail("Appointment", view.startsAt ? formatAppointment(view.startsAt) : null);
   appendDetail("Location", view.dealershipName || view.dealershipTown);
   if (details.children.length) card.append(details);
-  if (view.status === "confirmed") {
-    card.append(workshopBookingActions(view.reference));
-  }
   card.receiptView = {
     ...view,
     kind: "workshop_booking",

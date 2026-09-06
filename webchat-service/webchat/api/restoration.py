@@ -17,6 +17,7 @@ class ReceiptStore(Protocol):
 def message_view(message) -> dict:
     view = {
         "id": message.id,
+        "turnId": message.turn_id,
         "role": message.role,
         "text": message.text,
         "createdAt": message.created_at,
@@ -24,6 +25,16 @@ def message_view(message) -> dict:
     if message.view_type:
         view["viewType"] = message.view_type
         view["view"] = json.loads(message.view_payload_json)
+    if message.purpose:
+        view["purpose"] = message.purpose
+    if message.segments_json:
+        segments = json.loads(message.segments_json)
+        if isinstance(segments, list):
+            view["segments"] = segments
+    if message.blocks_json:
+        blocks = json.loads(message.blocks_json)
+        if isinstance(blocks, list):
+            view["blocks"] = blocks
     return view
 
 
@@ -65,7 +76,7 @@ class ConversationRestorer:
     def _draft_ids(messages) -> list[str]:
         draft_ids = []
         for message in messages:
-            if message.view_type not in {"draft", "confirmation"}:
+            if message.view_type not in {"draft", "secure_input", "confirmation"}:
                 continue
             payload = _payload(message)
             if isinstance(payload.get("draftId"), str):
@@ -76,7 +87,7 @@ class ConversationRestorer:
     def _active_messages(messages, statuses: dict[str, str]) -> list:
         active_messages = []
         for message in messages:
-            if message.view_type not in {"draft", "confirmation"}:
+            if message.view_type not in {"draft", "secure_input", "confirmation"}:
                 active_messages.append(message)
                 continue
             draft_id = _payload(message).get("draftId")
@@ -131,6 +142,7 @@ def _restorable_messages(messages) -> list:
     for index, message in enumerate(messages):
         if message.role != "assistant" or message.view_type not in {
             "draft",
+            "secure_input",
             "confirmation",
             "receipt",
         }:
@@ -139,7 +151,7 @@ def _restorable_messages(messages) -> list:
         kind = payload.get("kind")
         if not isinstance(kind, str) or not kind:
             continue
-        if message.view_type in {"draft", "confirmation"}:
+        if message.view_type in {"draft", "secure_input", "confirmation"}:
             pending_by_kind.setdefault(kind, []).append(index)
             continue
         for pending_index in pending_by_kind.pop(kind, []):

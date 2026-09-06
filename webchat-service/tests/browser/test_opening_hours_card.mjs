@@ -35,7 +35,7 @@ globalThis.document = {
   },
 };
 
-const { renderMessage, richSummary } = await import("../../webchat/widget/views/message.js");
+const { renderMessage } = await import("../../webchat/widget/views/message.js");
 
 function descendantWithClass(element, className) {
   if (element.className.split(" ").includes(className)) return element;
@@ -82,9 +82,8 @@ test("holiday opening-hours cards omit regular weekday schedules", () => {
     },
   };
 
-  assert.equal(richSummary(message), "Published holiday opening hours are shown below.");
-
   const rendered = renderMessage(message);
+  assert.equal(rendered.children[0].textContent, message.text);
   const card = descendantWithClass(rendered, "webchat-opening-hours-card");
   const heading = descendantWithClass(card, "webchat-opening-hours-heading");
   const holiday = descendantWithClass(card, "webchat-opening-holiday");
@@ -95,4 +94,25 @@ test("holiday opening-hours cards omit regular weekday schedules", () => {
     ["webchat-opening-hours-heading", "webchat-opening-holiday"],
   );
   assert.equal(holiday.children[0].textContent, "Bank holiday · 19 Sept");
+});
+
+test("a single dealership schedule keeps the server-grounded conversational prose", () => {
+  const text = "Northstar Manchester on Saturday: Sales is open 09:00–17:00; Service is closed.";
+  const rendered = renderMessage({
+    role: "assistant",
+    text,
+    viewType: "opening_hours",
+    view: {
+      day: "Saturday",
+      items: [{
+        name: "Northstar Manchester",
+        day: "Saturday",
+        departments: [
+          { name: "Sales", opensAt: "09:00", closesAt: "17:00", closed: false },
+          { name: "Service", closed: true },
+        ],
+      }],
+    },
+  });
+  assert.equal(rendered.children[0].textContent, text);
 });

@@ -35,7 +35,7 @@ async def local_reply(
         ("Do you do car cleaning?", "get_service_information"),
         ("What is the price of an interim service?", "get_service_information"),
         ("what is tyre cost", "get_service_information"),
-        ("I want to book a workshop appointment", "list_service_types"),
+        ("I want to book a workshop appointment", "list_workshop_slots"),
         ("I want to fit tyres", "list_workshop_slots"),
         ("I need an MOT in Liverpool", "list_workshop_slots"),
         ("find my existing workshop booking", "request_workshop_booking_lookup_form"),
@@ -187,6 +187,32 @@ async def test_workshop_location_follow_up_reuses_executed_service_state() -> No
     }
 
 
+@pytest.mark.asyncio
+async def test_workshop_service_choice_is_resolved_by_the_live_catalogue() -> None:
+    state = {
+        "version": 3,
+        "activeWorkflow": "workshop_booking",
+        "stage": "choosing_service",
+        "entities": {},
+        "constraints": {},
+        "lastTool": "list_workshop_slots",
+        "lastRenderer": "service_list",
+    }
+    reply = await local_reply(
+        "brakes",
+        [
+            {
+                "role": "developer",
+                "content": "Active application workflow state (trusted data): "
+                + __import__("json").dumps(state, separators=(",", ":")),
+            }
+        ],
+    )
+
+    assert reply.tool_calls[0].name == "refine_workshop_slots"
+    assert reply.tool_calls[0].arguments == {"serviceTypeName": "brakes"}
+
+
 def displayed_dealership_context(*dealerships: tuple[str, str]) -> dict[str, str]:
     items = [
         {
@@ -201,6 +227,96 @@ def displayed_dealership_context(*dealerships: tuple[str, str]) -> dict[str, str
         "content": "Current displayed dealership results (trusted application context): "
         + json.dumps(items, separators=(",", ":")),
     }
+
+
+def displayed_vehicle_context(*vehicles: tuple[str, str]) -> dict[str, str]:
+    items = [
+        {
+            "position": position,
+            "vehicleId": vehicle_id,
+            "label": label,
+        }
+        for position, (vehicle_id, label) in enumerate(vehicles, start=1)
+    ]
+    return {
+        "role": "developer",
+        "content": "Current displayed vehicle results (trusted application context): "
+        + json.dumps(items, separators=(",", ":")),
+    }
+
+
+@pytest.mark.asyncio
+async def test_open_displayed_vehicle_ordinal_proposes_protected_navigation() -> None:
+    reply = await local_reply(
+        "Open the second one",
+        [
+            displayed_vehicle_context(
+                ("veh-041", "2025 MINI Cooper"),
+                ("veh-005", "2024 MINI Cooper"),
+                ("veh-053", "2023 MINI Cooper"),
+            )
+        ],
+    )
+
+    assert reply.tool_calls == []
+    assert reply.interaction_proposal is not None
+    assert reply.interaction_proposal.kind == "open_vehicle_detail"
+    assert reply.interaction_proposal.entityReference == "vehicle:veh-005"
+
+
+@pytest.mark.asyncio
+async def test_show_the_recommended_vehicle_returns_its_read_only_card() -> None:
+    reply = await local_reply(
+        "Show me the vehicle",
+        [
+            displayed_vehicle_context(
+                ("veh-041", "2025 BMW 1 Series"),
+                ("veh-005", "2025 BMW X3"),
+                ("veh-053", "2025 MINI Countryman"),
+            ),
+            {
+                "role": "developer",
+                "content": (
+                    "Current conversationally focused vehicle from the immediately preceding "
+                    "grounded answer (trusted displayed candidate): "
+                    '{"vehicleId":"veh-041","make":"BMW","model":"1 Series"}'
+                ),
+            },
+        ],
+    )
+
+    assert reply.interaction_proposal is None
+    assert reply.tool_calls[0].name == "get_vehicle"
+    assert reply.tool_calls[0].arguments == {"id": "veh-041"}
+
+
+@pytest.mark.asyncio
+async def test_show_the_vehicle_without_singular_focus_clarifies() -> None:
+    reply = await local_reply(
+        "Show me the vehicle",
+        [
+            displayed_vehicle_context(
+                ("veh-041", "2025 BMW 1 Series"),
+                ("veh-005", "2025 BMW X3"),
+            )
+        ],
+    )
+
+    assert reply.interaction_proposal is None
+    assert reply.response_mode == "clarify"
+    assert reply.interaction is not None
+    assert reply.interaction.blocking_tool == "get_vehicle"
+
+
+@pytest.mark.asyncio
+async def test_open_dealership_question_remains_opening_hours_with_vehicle_context() -> None:
+    reply = await local_reply(
+        "Is the Manchester dealership open Saturday?",
+        [displayed_vehicle_context(("veh-041", "2025 MINI Cooper in Manchester"))],
+    )
+
+    assert reply.interaction_proposal is None
+    assert reply.tool_calls[0].name == "list_opening_hours"
 
 
 @pytest.mark.asyncio

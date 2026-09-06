@@ -1,1 +1,1 @@
-"""Hosted direct-proposal prompts and independent review contracts."""
+"""Hosted planning prompts and deterministic affordance contracts."""

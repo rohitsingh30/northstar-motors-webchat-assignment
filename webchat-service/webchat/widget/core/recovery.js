@@ -17,3 +17,11 @@ export function retryTurnState({ clientMessageId, text, action }, definitiveFail
     appendUser: definitiveFailure,
   };
 }
+
+export function turnFailureRecovery(error) {
+  return error?.retryable === false ? "rephrase" : "retry";
+}
+
+export function requestFailureKey(error) {
+  return `${error?.code || "CHAT_REQUEST_FAILED"}:${error?.message || "request failed"}`;
+}
